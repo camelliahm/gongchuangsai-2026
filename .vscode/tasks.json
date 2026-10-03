@@ -1,0 +1,54 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "EIDE: 构建",
+            "type": "shell",
+            "command": "${command:eide.project.build}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "EIDE: 重新构建",
+            "type": "shell",
+            "command": "${command:eide.project.rebuild}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "EIDE: 下载",
+            "type": "shell",
+            "command": "${command:eide.project.uploadToDevice}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "EIDE: 构建并下载",
+            "type": "shell",
+            "command": "${command:eide.project.buildAndFlash}",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "EIDE: 清理",
+            "type": "shell",
+            "command": "${command:eide.project.clean}",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "构建（直连 Builder，绕过 EIDE 命令）",
+            "type": "process",
+            "command": "C:\\Users\\LX\\.vscode\\extensions\\cl.eide-3.27.2\\res\\tools\\win32\\unify_builder\\unify_builder.exe",
+            "args": [
+                "-p",
+                "${workspaceFolder}\\PRJ\\build\\V1.0\\builder.params"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}\\PRJ"
+            },
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

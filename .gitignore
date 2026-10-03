@@ -13,5 +13,16 @@
 !/FreeRTOS/
 !/Mycode/
 
+# 编辑器配置：只纳入 IntelliSense / 任务相关的必要配置
+!/.vscode/
+/.vscode/*
+!/.vscode/c_cpp_properties.json
+!/.vscode/settings.json
+!/.vscode/tasks.json
+
+!/PRJ/
+/PRJ/*
+!/PRJ/STM32_CAN_CMD.code-workspace
+
 # 以下内容不入版本库：CMSIS、LIB、DRIVERS（第三方库）
-# PRJ（Keil/EIDE 工程与构建产物）、DOC、gongchuangsai-2026
+# PRJ 其余内容（构建产物、EIDE 缓存）、PRJ/.vscode（Keil Assistant 自动生成）、DOC、gongchuangsai-2026
