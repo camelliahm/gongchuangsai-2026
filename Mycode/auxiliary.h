@@ -1,5 +1,5 @@
-#ifndef __AUX_H
-#define __AUX_H
+#ifndef __AUXILIARY_H
+#define __AUXILIARY_H
 
 #include "chassis.h"
 

@@ -8,12 +8,9 @@
 __IO ChassisDrive_t chassisDrive;
 __IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];
 
-/**********************************************************
-***	姿态环 PID 实例
-***	四个轮子的闭环在驱动器内部完成，MCU 只做"底盘级"姿态修正：
-***	用里程计算出的 yaw 与目标 yaw 之差作为误差，输出叠加到 w 上。
-***	⚠ 调度器启动前不调用 PID_Calculate()，避免 xTaskGetTickCount() 未就绪
-**********************************************************/
+/*---- 姿态环 PID 实例 ----*/
+/* 四轮闭环在驱动器内部完成，MCU 只做底盘级姿态修正：yaw 误差叠加到 w */
+/* ⚠ 调度器启动前不调用 PID_Calculate()，避免 xTaskGetTickCount() 未就绪 */
 static PID_TypeDef s_yawPid;
 
 #define YAW_PID_KP			(2.0f)
@@ -21,16 +18,14 @@ static PID_TypeDef s_yawPid;
 #define YAW_PID_KD			(0.0f)
 #define YAW_PID_OUT_MAX		(200.0f)	/* 姿态修正量上限(0.1度/s 单位) */
 
-/**********************************************************
-***	内部换算
-**********************************************************/
+/*---- 内部换算 ----*/
 
 /**
  * @brief  底盘线速度(mm/s) → 轮子转速(RPM)
  * @param  v_mm_s 轮子线速度(mm/s)
  * @retval 转速(RPM)，带符号
  * @note   周长 = π × 直径；转速 = 线速度 / 周长 × 60 × 减速比
- * @author camelliehm
+ * @author camelliahm
  */
 static int16_t chassis_VelToRpm(float v_mm_s)
 {
@@ -48,7 +43,7 @@ static int16_t chassis_VelToRpm(float v_mm_s)
  * @brief  轮子转速(RPM) → 轮子线速度(mm/s)
  * @param  rpm 转速(RPM)，带符号
  * @retval 线速度(mm/s)
- * @author camelliehm
+ * @author camelliahm
  */
 static float chassis_RpmToVel(int16_t rpm)
 {
@@ -57,16 +52,14 @@ static float chassis_RpmToVel(int16_t rpm)
 	return ((float)rpm / CHASSIS_GEAR_RATIO) * circumference / 60.0f;
 }
 
-/*----------------------------------------------------------*/
-/*  四台电机的动作与上报                                        */
-/*----------------------------------------------------------*/
+/*---- 四台电机的动作与上报 ----*/
 
 /**
  * @brief  向四台驱动器广播一条"无参数"动作命令
  * @param  action 序号 0=断使能 1=使能 2=立即停止
  * @note   必须整段包在 can_TxLock/Unlock 内：Emm_V5_* 用的是
  *         文件级 static 缓冲，跨任务并发会互相覆盖
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_DriveBroadcast(uint8_t action)
 {
@@ -94,7 +87,7 @@ void chassis_DriveBroadcast(uint8_t action)
  * @brief  打开四台驱动器的定时上报（掉线检测与停稳判断的依据）
  * @note   上报周期 CHASSIS_FB_PERIOD_MS，4 台合计约 200 帧/s，
  *         在 500 kbit/s 总线上约占 5% 带宽
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_EnableFeedback(void)
 {
@@ -114,7 +107,7 @@ void chassis_EnableFeedback(void)
  * @brief  把所有电机心跳重置为"现在"并清在线标志
  * @note   进入 READY 时调用：给每台电机一个完整的超时窗口，
  *         避免刚使能就被看门狗误判掉线
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_ResetHeartbeat(void)
 {
@@ -131,7 +124,7 @@ void chassis_ResetHeartbeat(void)
 /**
  * @brief  清全部在线标志
  * @note   进入 IDLE（未使能）时调用：此时不该期待任何反馈
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_ClearOnline(void)
 {
@@ -143,9 +136,7 @@ void chassis_ClearOnline(void)
 	}
 }
 
-/*----------------------------------------------------------*/
-/*  反馈处理                                                   */
-/*----------------------------------------------------------*/
+/*---- 反馈处理 ----*/
 
 /**
  * @brief  解析电机反馈帧
@@ -156,7 +147,7 @@ void chassis_ClearOnline(void)
  *           0x36 = S_CPOS 实时位置（4 字节，有符号）
  *           0x3A = S_FLAG 状态标志位（1 字节）
  *         ⚠ 回包字节序按 ZDT 手册的大端约定书写，需上硬件实测确认
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_HandleFeedback(uint8_t idx, const CAN_Frame_t *f)
 {
@@ -197,16 +188,14 @@ void chassis_HandleFeedback(uint8_t idx, const CAN_Frame_t *f)
 	}
 }
 
-/*----------------------------------------------------------*/
-/*  周期任务                                                   */
-/*----------------------------------------------------------*/
+/*---- 周期任务 ----*/
 
 /**
  * @brief  反馈看门狗：电机应在线却没回帧 → 故障
  * @note   仅在 READY / RUNNING / BRAKING 下判定。
  *         只在"在线 → 掉线"的跳变沿投递一次 EV_FAULT：否则每个控制
  *         周期都会投递，把 8 深的队列刷爆并淹没真正的事件。
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_DriveWatchdog(void)
 {
@@ -248,7 +237,7 @@ void chassis_DriveWatchdog(void)
  * @brief  停稳判断：BRAKING 下四轮转速持续接近 0 即认为停稳
  * @note   只判四轮。升降轴有自己的到位判据（aux_LiftStep），
  *         且丝杆运动与底盘停车无关，把它算进来会让底盘永远停不下来。
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_CheckBraking(void)
 {
@@ -295,11 +284,10 @@ void chassis_CheckBraking(void)
 
 /**
  * @brief  里程计推算：由四轮反馈转速反推车体位移与偏航
- * @note   轮序约定：0=左前 1=右前 2=左后 3=右后
- *         本函数用"反馈转速 × 周期"估算每轮位移，不依赖未标定的细分值。
- *         ⚠ 骨架实现：轮径/减速比/轮距参数必须实测标定后才能依赖，
- *           且轮序与符号必须与实际装配一致，否则里程计方向相反。
- * @author camelliehm
+ * @note   轮序约定：0=左前 1=右前 2=左后 3=右后；用"反馈转速 × 周期"估算每轮位移
+ *         ⚠ 骨架实现：轮径/减速比/轮距均为占位值，轮序与符号必须与实车装配一致，
+ *           未标定前里程计不可依赖（否则方向相反、距离失准）
+ * @author camelliahm
  */
 static void chassis_UpdateOdom(void)
 {
@@ -353,16 +341,12 @@ static void chassis_UpdateOdom(void)
 
 /**
  * @brief  麦轮逆运动学：车体速度(vx, vy, w) → 四轮目标转速(RPM)
- * @note   轮序约定：0=左前 1=右前 2=左后 3=右后
- *         标准麦轮逆解（车体坐标：+x 向右、+y 向前、w 逆时针为正）：
- *           v0(左前) = vy + vx - (lx+ly)·w
- *           v1(右前) = vy - vx + (lx+ly)·w
- *           v2(左后) = vy - vx - (lx+ly)·w
- *           v3(右后) = vy + vx + (lx+ly)·w
- *         ⚠ 四个轮子的辊子方向（左旋/右旋）必须与上式配套，
- *           若实车装配是另一种对角组合，需要交换 vx 的符号。
+ * @note   轮序约定：0=左前 1=右前 2=左后 3=右后；车体坐标 +x 向右、+y 向前、w 逆时针为正。
+ *         标准麦轮逆解（wz = (lx+ly) × w，w 已由 0.1 度/s 换算为 rad/s）：
+ *           v0(左前)=vy+vx-wz  v1(右前)=vy-vx+wz  v2(左后)=vy-vx-wz  v3(右后)=vy+vx+wz
+ *         ⚠ 辊子旋向须与上式配套；若实车装配是另一种对角组合，需交换 vx 的符号
  * @param  vx 横向速度(mm/s)  vy 纵向速度(mm/s)  w 角速度(0.1度/s)
- * @author camelliehm
+ * @author camelliahm
  */
 static void chassis_InverseKinematics(int16_t vx, int16_t vy, int16_t w)
 {
@@ -392,7 +376,7 @@ static void chassis_InverseKinematics(int16_t vx, int16_t vy, int16_t w)
  * @note   必须整段包在 can_TxLock/Unlock 内（Emm_V5_* 用文件级 static 缓冲）。
  *         Emm_V5_Vel_Control 的 dir 只取 0 或非 0，速度值本身必须为正，
  *         故这里按符号拆出 dir 与绝对值。
- * @author camelliehm
+ * @author camelliahm
  */
 static void chassis_SendWheelVel(void)
 {
@@ -427,7 +411,7 @@ static void chassis_SendWheelVel(void)
  * @note   流程：里程计 → 姿态环 PID 修正 w → 逆运动学 → 下发。
  *         四轮的位置/速度闭环在驱动器内部完成，故 MCU 这一环
  *         只做"底盘级"运动学与姿态修正，5ms 节拍足够。
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_DriveStep(void)
 {
@@ -437,10 +421,8 @@ void chassis_DriveStep(void)
 	/* 1. 里程计：由四轮反馈推算当前位姿 */
 	chassis_UpdateOdom();
 
-	/* 2. 姿态环：抑制跑偏。目标 yaw 恒为 0（保持航向）。
-	 *    PID_Calculate 内部按 Err = target - measure 计算，
-	 *    故把 odomYaw 作为 measure 传入，误差自动为 -odomYaw。
-	 *    若日后要做"转向到指定角度"，把最后的 0.0f 换成目标角度即可。 */
+	/* 2. 姿态环：抑制跑偏，目标 yaw 恒为 0（保持航向）。PID_Calculate 按
+	 *    Err = target - measure 计算；要转到指定角度就把下面的 0.0f 换掉 */
 	yawFix = PID_Calculate(&s_yawPid, chassisDrive.odomYaw, 0.0f);
 	/* 3. 姿态修正量叠加到角速度指令上（限幅，防止修正量盖过用户指令） */
 	if (yawFix >  YAW_PID_OUT_MAX) { yawFix =  YAW_PID_OUT_MAX; }
@@ -456,7 +438,7 @@ void chassis_DriveStep(void)
 /**
  * @brief  重置底盘驱动层状态（在 chassis_Init() 中调用）
  * @note   里程计清零、PID 实例初始化、心跳置零
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_DriveInit(void)
 {
@@ -478,10 +460,9 @@ void chassis_DriveInit(void)
 	chassisDrive.odomY   = 0.0f;
 	chassisDrive.odomYaw = 0.0f;
 
-	/* 姿态环：必开积分限幅（抗饱和）+ 微分先行（避免目标突变冲击）。
-	 * 参数顺序：max_out / integral_limit / deadband / kp / ki / kd /
-	 *          A / B / 输出滤波 / 微分滤波 / 改进位掩码
-	 * ⚠ 该库无控制周期无关性，改 CHASSIS_CTRL_PERIOD_MS 必须重新整定。 */
+	/* 姿态环必开积分限幅（抗饱和）+ 微分先行（避免目标突变冲击）；参数顺序：
+	 * max_out / integral_limit / deadband / kp / ki / kd / A / B / 输出滤波 / 微分滤波 / 改进位掩码
+	 * ⚠ 该库无控制周期无关性，改 CHASSIS_CTRL_PERIOD_MS 必须重新整定 */
 	PID_Init(&s_yawPid,
 			 (uint16_t)YAW_PID_OUT_MAX,
 			 (uint16_t)(YAW_PID_OUT_MAX * 0.2f),	/* 积分限幅取输出的 20% */

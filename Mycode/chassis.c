@@ -1,18 +1,14 @@
 #include "chassis.h"
 #include "chassis_drive.h"
-#include "aux.h"
+#include "auxiliary.h"
 #include "can.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 
-/**********************************************************
-***	底盘应用层 — 状态机 + 系统级调度
-***	分层结构、扩展指引、各模块职责见工程根目录 README.md。
-***	本文件不参杂具体控制算法。
-**********************************************************/
+/* 底盘应用层：状态机 + 系统级调度（不含控制算法），详见工程根目录 README.md */
 
-/* 静态存储期变量由启动代码清零；状态与指令字段在 chassis_Init() 中显式赋值*/
+/* 静态存储期变量由启动代码清零；state / lastCmd 在 chassis_Init() 中显式赋值 */
 __IO Chassis_t chassis;
 
 #define ARRAY_SIZE(a)	(sizeof(a) / sizeof((a)[0]))
@@ -27,10 +23,7 @@ typedef struct {
 
 static QueueHandle_t s_evtQueue = NULL;
 
-/*----------------------------------------------------------*/
-/*  状态迁移表                                                 */
-/*  注意：EV_ESTOP 是全局的，在查表之前单独处理。                */
-/*----------------------------------------------------------*/
+/*---- 状态迁移表（EV_ESTOP 全局，在查表之前单独处理）----*/
 typedef struct {
 	ChassisState_t from;
 	ChassisEvent_t ev;
@@ -53,16 +46,13 @@ static const ChassisTrans_t s_transTable[] = {
 	{ CHS_ESTOP,   EV_CLEAR_FAULT, CHS_IDLE    },	/* 急停解除一律回 IDLE，须重新使能 */
 };
 
-/*----------------------------------------------------------*/
-/*  状态进入动作                                               */
-/*  这里只做"按状态编排各模块的动作"，不含具体控制算法。          */
-/*----------------------------------------------------------*/
+/*---- 状态进入动作（只编排各模块动作，不含控制算法）----*/
 
 /**
  * @brief  状态进入动作
  * @param  s 目标状态
  * @note   新增机构时，在下面各 case 里补一行该机构的使能/失能调用即可
- * @author camelliehm
+ * @author camelliahm
  */
 static void chassis_OnEnter(ChassisState_t s)
 {
@@ -120,7 +110,7 @@ static void chassis_OnEnter(ChassisState_t s)
  * @brief  事件处理：查表迁移
  * @param  ev    事件
  * @param  param 事件参数（当前未使用）
- * @author camelliehm
+ * @author camelliahm
  */
 static void chassis_Step(ChassisEvent_t ev, uint32_t param)
 {
@@ -149,72 +139,113 @@ static void chassis_Step(ChassisEvent_t ev, uint32_t param)
 	chassis.evtIgnored++;
 }
 
-/*----------------------------------------------------------*/
-/*  报文处理（由 CAN 接收任务调用）                             */
-/*----------------------------------------------------------*/
+/*---- 消息处理（由 CAN 接收任务调用）----*/
 
 /**
- * @brief  解析上位机指令帧
- * @param  f 收到的帧（已确认地址为本机）
- * @note   先交给 aux_HandleCmd() 试分发给辅助机构，不认识才走底盘状态机
- * @author camelliehm
+ * @brief  系统段消息（0x00~0x0F）：转投状态机事件
+ * @retval true-已受理 false-段内无属主（计入 evtIgnored）
+ * @note   只投请求，能否迁移由状态机查表决定（闸门在 s_transTable）
+ * @author camelliahm
  */
-static void chassis_HandleCmd(const CAN_Frame_t *f)
+static bool chassis_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
-	ChassisCmd_t cmd = (ChassisCmd_t)f->Data[0];
+	(void)f;
+
+	switch (cmd)
+	{
+	case CMD_ENABLE:      chassis_PostEvent(EV_ENABLE, 0);      return true;
+	case CMD_DISABLE:     chassis_PostEvent(EV_DISABLE, 0);     return true;
+	case CMD_START:       chassis_PostEvent(EV_START, 0);       return true;
+	case CMD_STOP:        chassis_PostEvent(EV_STOP, 0);        return true;
+	case CMD_ESTOP:       chassis_PostEvent(EV_ESTOP, 0);       return true;
+	case CMD_CLEAR_FAULT: chassis_PostEvent(EV_CLEAR_FAULT, 0); return true;
+	default:                                                    return false;
+	}
+}
+
+/**
+ * @brief  底盘段消息（0x10~0x1F）：速度指令
+ * @retval true-已受理 false-段内无属主（计入 evtIgnored）
+ * @note   解析前先校验 DLC；速度只在 RUNNING 下写入黑板，其余状态一律忽略
+ * @author camelliahm
+ */
+static bool chassis_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
+{
 	int16_t vx;
 	int16_t vy;
 	int16_t w;
 
-	/* 辅助机构指令（升降轴等）自成一段，不参与底盘状态机迁移 */
-	if (aux_HandleCmd(cmd, f))
+	if (cmd != CMD_SET_VEL)
 	{
-		chassis.lastCmd = cmd;
-		return;
+		return false;
 	}
 
-	switch (cmd)
+	/* 参数 6 字节 + 消息码 = DLC 至少 7 */
+	if (f->DLC >= 7)
 	{
-	case CMD_ENABLE:      chassis_PostEvent(EV_ENABLE, 0);      break;
-	case CMD_DISABLE:     chassis_PostEvent(EV_DISABLE, 0);     break;
-	case CMD_START:       chassis_PostEvent(EV_START, 0);       break;
-	case CMD_STOP:        chassis_PostEvent(EV_STOP, 0);        break;
-	case CMD_ESTOP:       chassis_PostEvent(EV_ESTOP, 0);       break;
-	case CMD_CLEAR_FAULT: chassis_PostEvent(EV_CLEAR_FAULT, 0); break;
+		vx = (int16_t)(((uint16_t)f->Data[1] << 8) | (uint16_t)f->Data[2]);
+		vy = (int16_t)(((uint16_t)f->Data[3] << 8) | (uint16_t)f->Data[4]);
+		w  = (int16_t)(((uint16_t)f->Data[5] << 8) | (uint16_t)f->Data[6]);
 
-	case CMD_SET_VEL:
-		/* 参数 6 字节 + 功能码 = DLC 至少 7 */
-		if (f->DLC >= 7)
+		/* 速度指令只在 RUNNING 下生效，其他状态一律忽略 */
+		if (chassis.state == CHS_RUNNING)
 		{
-			vx = (int16_t)(((uint16_t)f->Data[1] << 8) | (uint16_t)f->Data[2]);
-			vy = (int16_t)(((uint16_t)f->Data[3] << 8) | (uint16_t)f->Data[4]);
-			w  = (int16_t)(((uint16_t)f->Data[5] << 8) | (uint16_t)f->Data[6]);
+			chassis.vx = vx;
+			chassis.vy = vy;
+			chassis.w  = w;
+		}
+	}
 
-			/* 速度指令只在 RUNNING 下生效，其他状态一律忽略 */
-			if (chassis.state == CHS_RUNNING)
+	return true;
+}
+
+/*---- 消息路由表：按"码 & mask"查表派发；新增模块加一行 ----*/
+typedef struct {
+	uint8_t          seg;		/* 段基址，如 CHASSIS_SEG_LIFT */
+	uint8_t          mask;		/* 段掩码，如 CHASSIS_SEG_MASK */
+	ChassisHandler_t handler;	/* 该段消息的属主模块 */
+} ChassisRoute_t;
+
+static const ChassisRoute_t s_routeTable[] = {
+	{ CHASSIS_SEG_SYS,   CHASSIS_SEG_MASK, chassis_SysCmd   },	/* 0x00~0x0F 系统   */
+	{ CHASSIS_SEG_DRIVE, CHASSIS_SEG_MASK, chassis_DriveCmd },	/* 0x10~0x1F 底盘   */
+	{ CHASSIS_SEG_LIFT,  CHASSIS_SEG_MASK, aux_HandleCmd    },	/* 0x20~0x2F 升降轴 */
+};
+
+/**
+ * @brief  消息入口：按段查路由表，同步派发给属主模块
+ * @param  f 收到的帧（已确认地址为本机）
+ * @note   同一拍内处理完；无属主则忽略并计数，不当成错误
+ * @author camelliahm
+ */
+static void chassis_HandleCmd(const CAN_Frame_t *f)
+{
+	ChassisCmd_t cmd = (ChassisCmd_t)f->Data[0];
+	uint8_t i;
+
+	for (i = 0; i < ARRAY_SIZE(s_routeTable); i++)
+	{
+		if ((cmd & s_routeTable[i].mask) == s_routeTable[i].seg)
+		{
+			if (s_routeTable[i].handler(cmd, f))
 			{
-				chassis.vx = vx;
-				chassis.vy = vy;
-				chassis.w  = w;
+				chassis.lastCmd = cmd;
+				return;
 			}
 		}
-		break;
-
-	default:
-		break;
 	}
 
+	/* 段未注册 / 段内未知码：忽略并计数（调试时可观察 evtIgnored） */
+	chassis.evtIgnored++;
 	chassis.lastCmd = cmd;
 }
 
-/*----------------------------------------------------------*/
-/*  对外接口                                                   */
-/*----------------------------------------------------------*/
+/*---- 对外接口 ----*/
 
 /**
  * @brief  初始化（创建事件队列），需在创建任务前调用
  * @note   依次初始化事件队列、底盘驱动层、辅助机构层
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_Init(void)
 {
@@ -231,9 +262,9 @@ void chassis_Init(void)
 /**
  * @brief  处理一帧接收报文：按地址分流
  * @param  f 收到的帧
- * @note   0xFE → 指令；0x01~0x04 → 四轮反馈；0x05 → 升降轴反馈；
+ * @note   0xFE → 消息；0x01~0x04 → 四轮反馈；0x05 → 升降轴反馈；
  *         其余地址（含 0x00 广播）忽略
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_HandleFrame(const CAN_Frame_t *f)
 {
@@ -260,7 +291,7 @@ void chassis_HandleFrame(const CAN_Frame_t *f)
  * @param  ev    事件
  * @param  param 事件参数
  * @note   投递方可能是控制环，绝不能在这里挂住，故超时为 0
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_PostEvent(ChassisEvent_t ev, uint32_t param)
 {
@@ -278,16 +309,14 @@ void chassis_PostEvent(ChassisEvent_t ev, uint32_t param)
 	(void)xQueueSend(s_evtQueue, &msg, 0);
 }
 
-/*----------------------------------------------------------*/
-/*  任务体                                                     */
-/*----------------------------------------------------------*/
+/*---- 任务体 ----*/
 
 /**
  * @brief  控制环任务
  * @param  pvParameters 未使用
  * @note   周期 CHASSIS_CTRL_PERIOD_MS，需保证节拍绝对稳定。
  *         本任务只负责"节拍"与状态相关的调度，算法在各模块内。
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_CtrlTask(void *pvParameters)
 {
@@ -309,7 +338,7 @@ void chassis_CtrlTask(void *pvParameters)
  * @param  pvParameters 未使用
  * @note   阻塞等待接收队列（CAN1_RX0 中断投递），
  *         取到帧后交由 chassis_HandleFrame() 按地址分流
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_CanRecvTask(void *pvParameters)
 {
@@ -331,7 +360,7 @@ void chassis_CanRecvTask(void *pvParameters)
  * @brief  状态机任务
  * @param  pvParameters 未使用
  * @note   阻塞在事件队列上，无事件时不占 CPU
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_StateTask(void *pvParameters)
 {
@@ -352,7 +381,7 @@ void chassis_StateTask(void *pvParameters)
  * @brief  控制环周期内调用（每 CHASSIS_CTRL_PERIOD_MS 一次）
  * @note   编排顺序：各模块看门狗 → 各模块周期判断 → RUNNING 下驱动底盘。
  *         各模块内部只做"自己的事"，互不干涉。
- * @author camelliehm
+ * @author camelliahm
  */
 void chassis_ControlStep(void)
 {
@@ -376,7 +405,7 @@ void chassis_ControlStep(void)
  * @brief  取状态名（调试打印用）
  * @param  s 状态枚举
  * @retval 状态名字符串；越界时返回 "UNKNOWN"
- * @author camelliehm
+ * @author camelliahm
  */
 const char *chassis_StateName(ChassisState_t s)
 {

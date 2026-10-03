@@ -15,7 +15,7 @@ static SemaphoreHandle_t s_canTxMutex = NULL;
  * @param  无
  * @retval true-成功 false-堆内存不足
  * @note   需在创建任务之前、调度器启动之前调用
- * @author camelliehm
+ * @author camelliahm
  */
 bool can_RtosInit(void)
 {
@@ -30,7 +30,7 @@ bool can_RtosInit(void)
  * @param  out 输出帧
  * @param  timeout_ms 超时时间(ms)，0 表示不等待
  * @retval true-取到一帧 false-超时或未初始化
- * @author camelliehm
+ * @author camelliahm
  */
 bool can_RecvFrame(CAN_Frame_t *out, uint32_t timeout_ms)
 {
@@ -47,7 +47,7 @@ bool can_RecvFrame(CAN_Frame_t *out, uint32_t timeout_ms)
  * @param  无
  * @retval 无
  * @note   调度器未启动时退化为空操作（此时不存在并发）
- * @author camelliehm
+ * @author camelliahm
  */
 void can_TxLock(void)
 {
@@ -61,7 +61,7 @@ void can_TxLock(void)
  * @brief  发送互斥解锁
  * @param  无
  * @retval 无
- * @author camelliehm
+ * @author camelliahm
  */
 void can_TxUnlock(void)
 {
@@ -77,7 +77,7 @@ void can_TxUnlock(void)
  * @retval 无
  * @note   中断内只做最小搬运：写入全局（便于调试器直接观察）并投递到队列，
  *         所有解析一律放到任务里做。队列满则丢弃，绝不阻塞中断。
- * @author camelliehm
+ * @author camelliahm
  */
 void CAN1_RX0_IRQHandler(void)
 {
@@ -118,7 +118,7 @@ void CAN1_RX0_IRQHandler(void)
  * @retval 邮箱编号 0~2；0x04(CAN_TxStatus_NoMailBox) 表示发送失败
  * @note   已关闭自动重传（CAN_NART = ENABLE），失败帧不会占着邮箱反复重试；
  *         控制帧由下一周期覆盖，因此丢弃是可接受的。
- * @author camelliehm
+ * @author camelliahm
  */
 static uint8_t can_TransmitNoWait(__IO CanTxMsg *msg)
 {
@@ -136,7 +136,7 @@ static uint8_t can_TransmitNoWait(__IO CanTxMsg *msg)
  * @brief  CAN发送多个字节
  * @param  cmd 命令缓冲：[addr, 功能码, 参数..., 校验字节]
  * @param  len 缓冲总长度
- * @author camelliehm
+ * @author camelliahm
  */
 void can_SendCmd(__IO uint8_t *cmd, uint8_t len)
 {

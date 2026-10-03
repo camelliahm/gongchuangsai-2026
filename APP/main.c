@@ -1,6 +1,10 @@
 #include "board.h"
 #include "can.h"
 #include "chassis.h"
+#include "servo.h"
+#include "input.h"
+#include "oled.h"
+#include "nav.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -34,7 +38,7 @@ static const TaskDesc_t s_tasks[] = {
  * @param  xTask 溢出任务的句柄
  * @param  pcTaskName 溢出任务名
  * @note   configCHECK_FOR_STACK_OVERFLOW = 2 时必须实现
- * @author camelliehm
+ * @author camelliahm
  */
 void vApplicationStackOverflowHook(struct tskTaskControlBlock *xTask, char *pcTaskName)
 {
@@ -54,7 +58,7 @@ void vApplicationStackOverflowHook(struct tskTaskControlBlock *xTask, char *pcTa
 
 /**
  * @brief  按任务表统一创建任务
- * @author camelliehm
+ * @author camelliahm
  */
 static void App_TaskCreate(void)
 {
@@ -73,18 +77,34 @@ static void App_TaskCreate(void)
 }
 
 /**
+ * @brief  全部初始化，按依赖顺序集中调用
+ * @note   board_init() 须最先执行（时钟与 GPIO 由它打开）；
+ *         创建队列/互斥锁的调用须排在建立任务之前。
+ * @author camelliahm
+ */
+static void ALL_Init(void)
+{
+	board_init();                          // 硬件初始化（NVIC、时钟、GPIO、CAN）
+	servo_Init();                          // 三路舵机 PWM（TIM3 CH1~CH3）
+	input_Init();                          // 两路串口（USART1 视觉 / USART2 二维码）
+	oled_Init();                           // OLED 状态屏（软件 I2C）
+	nav_Init();                            // 编排层：装载默认地图，不自动启动
+	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁
+	chassis_Init();                        // 状态机事件队列
+	App_TaskCreate();                      // 按任务表创建所有任务
+}
+
+/**
  * @brief  MAIN函数
  * @note   delay_ms()/delay_us() 会重新配置并关闭 SysTick，
  *         调度器启动后禁止使用，请改用 vTaskDelay()。
- * @author camelliehm
+ * @author camelliahm
  */
 int main(void)
 {
-	board_init();                          // ① 硬件初始化（NVIC、时钟、GPIO、CAN）
-	configASSERT(can_RtosInit() == true);  // ② 创建 CAN 接收队列与发送互斥锁（须在创建任务前）
-	chassis_Init();                        // ③ 创建状态机事件队列
-	App_TaskCreate();                      // ④ 按任务表创建所有任务
-	vTaskStartScheduler();                 // ⑤ 启动调度器（不再返回）
+	ALL_Init();                            // 初始化
+	vTaskStartScheduler();                 // 启动调度器（不再返回）
+
 	while(1)
 	{
 

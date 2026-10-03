@@ -1,4 +1,4 @@
-#include "aux.h"
+#include "auxiliary.h"
 #include "Emm_V5.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -75,7 +75,7 @@ void lift_EnableFeedback(void)
 
 /**
  * @brief  清在线标志
- * @author camelliehm
+ * @author camelliahm
  */
 void lift_ClearOnline(void)
 {
@@ -115,7 +115,7 @@ bool lift_MoveBy(int32_t delta, uint16_t vel, uint8_t acc)
  * @param  mm 期望高度(mm)
  * @retval 夹到 [0, LIFT_STROKE_MM] 之后的高度
  * @note   只在 homed = 1（已回零或 SetZero）后有意义；未回零时零点不在行程最低点
- * @author camelliehm
+ * @author camelliahm
  */
 static float lift_ClampMM(float mm)
 {
@@ -137,7 +137,7 @@ static float lift_ClampMM(float mm)
  * @param  acc 加速度(0-255，0 = 直接启动)
  * @retval true-已下发 false-当前状态不接受（未使能 / FAULT / ESTOP）
  * @note   目标先经 lift_ClampMM() 夹到行程内，撞不到机械极限
- * @author camelliehm
+ * @author camelliahm
  */
 bool lift_MoveToMM(float mm, uint16_t vel, uint8_t acc)
 {
@@ -153,7 +153,7 @@ bool lift_MoveToMM(float mm, uint16_t vel, uint8_t acc)
  * @param  acc 加速度(0-255，0 = 直接启动)
  * @retval true-已下发 false-当前状态不接受
  * @note   先算绝对目标再夹行程，故"已到顶再升"会停在上限而非发出越界指令
- * @author camelliehm
+ * @author camelliahm
  */
 bool lift_MoveByMM(float deltaMM, uint16_t vel, uint8_t acc)
 {
@@ -164,7 +164,7 @@ bool lift_MoveByMM(float deltaMM, uint16_t vel, uint8_t acc)
  * @brief  读当前高度（mm）
  * @retval 由 S_CPOS 反馈脉冲换算的高度
  * @note   未回零时是相对多圈计数，不是绝对行程高度
- * @author camelliehm
+ * @author camelliahm
  */
 float lift_GetHeightMM(void)
 {
@@ -193,7 +193,7 @@ void lift_Home(void)
  * @brief  立即停止升降轴（不影响底盘）
  * @note   Stop_Now 是保持使能的减速停止，不撤扭矩，对丝杆负载安全；
  *         真正要断电的急停走 lift_SetEnable(false)
- * @author camelliehm
+ * @author camelliahm
  */
 void lift_StopNow(void)
 {
@@ -209,7 +209,7 @@ void lift_StopNow(void)
  * @brief  将升降轴当前位置清零
  * @note   软件标定原点（非回零）：必须在真实零位且已卸负载时调用，
  *         否则整段行程的基准都是错的；调用后置 homed=1
- * @author camelliehm
+ * @author camelliahm
  */
 void lift_SetZero(void)
 {
@@ -237,16 +237,16 @@ bool lift_IsMoving(void)
 	return (lift.moving != 0);
 }
 
-/*---- 指令分发（只处理"受上位机 CAN 指令控制"的机构）----*/
+/*---- 消息分发（只处理"受消息控制"的机构）----*/
 
 /**
- * @brief  尝试把一帧 CAN 指令按"辅助机构"处理
- * @param  cmd 功能码
+ * @brief  尝试把一条消息按"辅助机构"处理
+ * @param  cmd 消息码
  * @param  f   收到的帧
- * @retval true-是本模块的指令并已处理 false-不认识，交给底盘状态机
+ * @retval true-已受理 false-未受理（交后续路由，最终计入 evtIgnored）
  * @note   升降轴指令只在 READY / RUNNING 下被接受（停止/清堵转除外），
  *         未使能时下发移动会被拒绝并计数
- * @author camelliehm
+ * @author camelliahm
  */
 bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
@@ -346,7 +346,7 @@ bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
  * @param  f 收到的帧（地址已确认为 0x05）
  * @note   与四轮共用同一套信息功能码：0x35 S_VEL 转速 / 0x36 S_CPOS 位置 /
  *         0x3B S_OFLAG 回零标志（0 = 回零完成）；数据为大端有符号
- * @author camelliehm
+ * @author camelliahm
  */
 void aux_HandleLiftFeedback(const CAN_Frame_t *f)
 {
@@ -394,7 +394,7 @@ void aux_HandleLiftFeedback(const CAN_Frame_t *f)
 /**
  * @brief  升降轴反馈看门狗
  * @note   仅 READY / RUNNING 下判定；只在"在线 → 掉线"跳变沿投一次 EV_FAULT
- * @author camelliehm
+ * @author camelliahm
  */
 static void lift_Watchdog(void)
 {
@@ -423,7 +423,7 @@ static void lift_Watchdog(void)
  * @brief  升降轴到位判断与回零超时保护
  * @note   ① 回零超时（限位失效会一直撞到底）→ 中断回零并报故障；
  *         ② 到位判定同时看位置与转速，只更新标志、不投递事件
- * @author camelliehm
+ * @author camelliahm
  */
 static void lift_CheckArrive(void)
 {
@@ -478,7 +478,7 @@ static void lift_CheckArrive(void)
 
 /**
  * @brief  辅助机构周期任务：由控制环每 5ms 调用
- * @author camelliehm
+ * @author camelliahm
  */
 void aux_Step(void)
 {
@@ -489,7 +489,7 @@ void aux_Step(void)
 
 /**
  * @brief  初始化辅助机构（在 chassis_Init() 中调用）
- * @author camelliehm
+ * @author camelliahm
  */
 void aux_Init(void)
 {

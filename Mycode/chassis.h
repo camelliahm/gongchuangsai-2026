@@ -4,31 +4,26 @@
 #include "board.h"
 #include "can.h"
 
-/**********************************************************
-***	底盘应用层 — 公共契约层
-***	本文件只放各模块都要用到的"契约"：地址宏、功能码枚举、
-***	状态/事件枚举、Chassis_t、任务参数、chassis_* 对外接口。
-***	各层自己的类型与宏（ChassisMotor_t / ChassisDrive_t / Lift_t /
-***	LIFT_* / CHASSIS_*_PERIOD_MS 等）分别在自己的头文件里，不要写到这里。
-**********************************************************/
+/* 公共契约层：地址宏 / 消息码 / 状态与事件枚举 / Chassis_t / 任务参数 / 对外接口，详见 README.md */
 
-/**********************************************************
-***	地址分配（遵循 ZDT 帧格式：ExtId[28:8] = 地址，ExtId[7:0] = 包序号）
-***		0x01 ~ 0x04 ：四台 Emm_V5 驱动器（麦轮）
-***		0x05        ：升降轴驱动器（丝杆）
-***		0xFE        ：本机（上位机发给底盘的指令帧用这个地址）
-***	注意：0x00 是 ZDT 的广播地址，绝不可占用；其余地址一律忽略。
-***	本表仅涵盖挂在 CAN1 上的设备，详见 README.md「CAN 地址分配」。
-**********************************************************/
+/*---- 地址分配（ZDT 帧：ExtId[28:8] = 地址，ExtId[7:0] = 包序号）----*/
+/* 0x01~0x04 四轮 / 0x05 升降轴 / 0xFE 本机；0x00 是 ZDT 广播地址，禁止占用。全表见 README.md */
 #define CHASSIS_ADDR_HOST			(0xFEu)
 #define CHASSIS_ADDR_MOTOR_BASE		(0x01u)
 #define CHASSIS_MOTOR_NUM			(4u)
 #define CHASSIS_ADDR_LIFT			(0x05u)
 
-/**********************************************************
-***	上位机 → 本机 指令功能码
-***	帧格式与本工程一致：Data[0] = 功能码，Data[1..] = 参数
-**********************************************************/
+/*---- 消息码分段：段基址 = 码 & CHASSIS_SEG_MASK ----*/
+/* 0x00 系统 / 0x10 底盘 / 0x20 升降轴；0x30 舵机 / 0x40 任务 / 0x50 视觉（后三段规划中） */
+#define CHASSIS_SEG_SYS			(0x00u)
+#define CHASSIS_SEG_DRIVE		(0x10u)
+#define CHASSIS_SEG_LIFT		(0x20u)
+#define CHASSIS_SEG_SERVO		(0x30u)
+#define CHASSIS_SEG_NAV			(0x40u)
+#define CHASSIS_SEG_VISION		(0x50u)
+#define CHASSIS_SEG_MASK		(0xF0u)		/* 段掩码：段基址 = 码 & MASK */
+
+/*---- 消息码：Data[0] = 消息码，Data[1..] = 参数；各段属主见 chassis.c 的 s_routeTable[] ----*/
 typedef enum {
 	CMD_NONE		= 0x00,
 	CMD_ENABLE		= 0x01,		/* 参数无：IDLE  → READY   */
@@ -39,11 +34,8 @@ typedef enum {
 	CMD_CLEAR_FAULT	= 0x06,		/* 参数无：FAULT/ESTOP → READY/IDLE */
 	CMD_SET_VEL		= 0x10,		/* 参数：vx(int16) vy(int16) w(int16) 大端，共 6 字节 */
 
-	/**********************************************************
-	***	升降轴指令（0x20~0x2F 段，与底盘指令共用总线）
-	***	这些指令只影响升降轴，不触发底盘状态机迁移。
-	***	除 CMD_LIFT_STOP / CMD_LIFT_CLEARF 外，仅在 READY / RUNNING 下生效。
-	**********************************************************/
+	/*---- 升降轴指令（0x20~0x2F）：只影响升降轴，不触发底盘状态机迁移 ----*/
+	/* 除 CMD_LIFT_STOP / CMD_LIFT_CLEARF 外，仅在 READY / RUNNING 下生效 */
 	CMD_LIFT_POS	= 0x20,		/* 参数 8 字节，DLC=9（单帧塞满）：
 								   [1] 方向 0=上升/1=下降
 								   [2..3] 位移量(脉冲, u16 大端)
@@ -59,9 +51,11 @@ typedef enum {
 	CMD_LIFT_CLEARF	= 0x24,		/* 参数无：解除升降轴堵转保护 */
 } ChassisCmd_t;
 
-/**********************************************************
-***	状态机状态
-**********************************************************/
+/*---- 消息处理器（按段注册到 chassis.c 的 s_routeTable[]）----*/
+/* 返回 true = 已受理；false = 未受理（段内无属主，计入 evtIgnored） */
+typedef bool (*ChassisHandler_t)(ChassisCmd_t cmd, const CAN_Frame_t *f);
+
+/*---- 状态机状态 ----*/
 typedef enum {
 	CHS_IDLE = 0,		/* 初始：电机失能 */
 	CHS_READY,			/* 就绪：已使能，等待运动指令 */
@@ -72,9 +66,7 @@ typedef enum {
 	CHS_STATE_NUM
 } ChassisState_t;
 
-/**********************************************************
-***	状态机事件
-**********************************************************/
+/*---- 状态机事件 ----*/
 typedef enum {
 	EV_NONE = 0,
 	EV_ENABLE,
@@ -88,27 +80,20 @@ typedef enum {
 	EV_EVENT_NUM
 } ChassisEvent_t;
 
-/**********************************************************
-***	底盘整体状态（系统级）
-***	各模块自己的状态：chassisMotor[] / chassisDrive[] 在 chassis_drive.h，
-***	lift 在 aux.h。
-**********************************************************/
+/*---- 底盘整体状态（系统级）----*/
+/* 各模块自己的状态：chassisMotor[] / chassisDrive[] 见 chassis_drive.h，lift 见 auxiliary.h */
 typedef struct {
 	ChassisState_t state;
-	ChassisCmd_t   lastCmd;		/* 最后一条收到的指令（诊断用） */
+	ChassisCmd_t   lastCmd;		/* 最后一条收到的消息码（诊断用） */
 	uint32_t	   evtIgnored;	/* 被忽略的事件数（诊断用） */
 	uint32_t	   faultCnt;	/* 进入 FAULT/ESTOP 的次数 */
 
-	int16_t		   vx, vy, w;	/* 目标底盘速度，供控制环消费 */
-								/* 单位约定：vx/vy = mm/s，w = 0.1 度/s */
+	int16_t		   vx, vy, w;	/* 目标底盘速度：vx/vy = mm/s，w = 0.1 度/s */
 
 	uint32_t	   stateTick;	/* 进入当前状态的 tick */
 } Chassis_t;
 
-/**********************************************************
-***	任务参数（实际创建在 APP/main.c 的任务表里）
-***	优先级划分与周期取值的依据见 README.md。
-**********************************************************/
+/*---- 任务参数（实际创建在 APP/main.c 的任务表里，优先级依据见 README.md）----*/
 #define CHASSIS_CTRL_TASK_PRIO		( tskIDLE_PRIORITY + 4 )
 #define CHASSIS_CTRL_TASK_STACK		( 512 )		/* 需做浮点运算，栈留大一些 */
 
@@ -122,7 +107,7 @@ extern __IO Chassis_t chassis;
 
 void chassis_Init(void);			/* 创建事件队列；须在创建任务之前调用 */
 
-void chassis_HandleFrame(const CAN_Frame_t *f);	/* 按地址分流：0xFE 指令 / 0x01~0x04 四轮反馈 / 0x05 升降反馈 */
+void chassis_HandleFrame(const CAN_Frame_t *f);	/* 按地址分流：0xFE 消息 / 0x01~0x04 四轮反馈 / 0x05 升降反馈 */
 
 void chassis_PostEvent(ChassisEvent_t ev, uint32_t param);	/* 投递状态机事件（非阻塞，队列满丢弃） */
 

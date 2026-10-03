@@ -4,7 +4,7 @@
  * @brief  配置NVIC控制器
  * @param  无
  * @retval 无
- * @author camelliehm
+ * @author camelliahm
  */
 void nvic_init(void)
 {	
@@ -27,7 +27,7 @@ void nvic_init(void)
  * @brief  外设时钟初始化
  * @param  无
  * @retval 无
- * @author camelliehm
+ * @author camelliahm
  */
 void clock_init(void)
 {
@@ -42,7 +42,7 @@ void clock_init(void)
  * @brief  初始化CAN
  * @param  无
  * @retval 无
- * @author camelliehm
+ * @author camelliahm
  */
 void can_init(void)
 {
@@ -112,7 +112,7 @@ void can_init(void)
  * @brief  板载初始化
  * @param  无
  * @retval 无
- * @author camelliehm
+ * @author camelliahm
  */
 void board_init(void)
 {

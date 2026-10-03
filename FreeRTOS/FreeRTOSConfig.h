@@ -52,6 +52,7 @@
 
 #define xPortPendSVHandler                           PendSV_Handler  /* 把 PendSV_Handler 映射到 port 层实现；stm32f4xx_it.c 不得再定义该函数 */
 #define vPortSVCHandler                              SVC_Handler  /* 把 SVC_Handler 映射到 port 层实现；stm32f4xx_it.c 不得再定义该函数 */
+#define xPortSysTickHandler                          SysTick_Handler  /*SysTick_Handler 映射到 port 层实现；stm32f4xx_it.c 不得再定义该函数*/
 
 /**********************************************************
 ***	钩子函数声明
