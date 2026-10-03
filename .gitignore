@@ -13,12 +13,13 @@
 !/FreeRTOS/
 !/Mycode/
 
-# 编辑器配置：只纳入 IntelliSense / 任务相关的必要配置
+# 编辑器配置：只纳入 IntelliSense / 调试 / 任务相关的必要配置
 !/.vscode/
 /.vscode/*
 !/.vscode/c_cpp_properties.json
 !/.vscode/settings.json
 !/.vscode/tasks.json
+!/.vscode/launch.json
 
 !/PRJ/
 /PRJ/*
