@@ -1,0 +1,17 @@
+# 白名单策略：默认忽略工程内所有内容，只放行需要版本化的源码与文档
+/*
+!/.gitignore
+!/README.md
+
+# APP 只纳入 main.c（其余 stm32f4xx_it / conf 属于 ST 模板）
+!/APP/
+/APP/*
+!/APP/main.c
+
+# 自研应用层与 RTOS
+!/BSP/
+!/FreeRTOS/
+!/Mycode/
+
+# 以下内容不入版本库：CMSIS、LIB、DRIVERS（第三方库）
+# PRJ（Keil/EIDE 工程与构建产物）、DOC、gongchuangsai-2026
