@@ -2,12 +2,12 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/*---- 通道硬件资源：USART1 → 视觉，USART2 → 二维码 -------------*/
-static USART_TypeDef *const       s_usart[INPUT_NUM]  = { USART1,       USART2       };
-static DMA_Stream_TypeDef *const  s_stream[INPUT_NUM] = { DMA2_Stream5, DMA1_Stream5 };
-static const uint32_t             s_chan[INPUT_NUM]   = { DMA_Channel_4, DMA_Channel_4 };
+/*---- 通道硬件资源 ------------------------------------------------*/
+static USART_TypeDef *const       s_usart[INPUT_NUM]  = { USART1,       USART3,       USART2       };
+static DMA_Stream_TypeDef *const  s_stream[INPUT_NUM] = { DMA2_Stream5, DMA1_Stream3, DMA1_Stream5 };
+static const uint32_t             s_chan[INPUT_NUM]   = { DMA_Channel_4, DMA_Channel_4, DMA_Channel_4 };
+static const IRQn_Type            s_irqn[INPUT_NUM]   = { USART1_IRQn,   USART3_IRQn,   USART2_IRQn  };
 
-#define INPUT_BAUD			(115200u)
 #define INPUT_RING_MASK		(INPUT_RING_SIZE - 1u)	/* INPUT_RING_SIZE 必须是 2 的幂 */
 
 /* DMA 目标缓冲（4 字节对齐） */
@@ -17,15 +17,14 @@ __align(4) static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF];
 static uint8_t  s_ring[INPUT_NUM][INPUT_RING_SIZE];
 static volatile uint16_t s_head[INPUT_NUM];
 static volatile uint16_t s_tail[INPUT_NUM];
-static volatile uint16_t s_drop[INPUT_NUM];
+static volatile uint16_t s_drop[INPUT_NUM];	/* 环满丢弃的字节数 */
+static volatile uint16_t s_byte[INPUT_NUM];	/* 累计到达字节数 */
 
-/* 解析结果 */
+/* 通道状态 */
 static InputSlot_t s_slot[INPUT_NUM];
-static uint16_t    s_lineLen[INPUT_NUM];
-static uint16_t    s_syncDrop[INPUT_NUM];	/* 解析侧已消费的丢字节计数 */
 
-/* 行首哨兵：只有 '\n' 结尾的完整行才可能首字节等于它；丢字节后靠它重同步 */
-#define INPUT_SYNC_CHAR		((uint8_t)'\n')
+/* 视觉模块 2 的帧槽位；帧格式未定，当前只被 input_Init() 归零 */
+__IO VisionSlot_t visionSlot;
 
 /*---- 中断服务：IDLE 触发，把本帧从 DMA 缓冲搬进环形缓冲 --------------*/
 
@@ -45,6 +44,8 @@ static void input_OnIdle(InputCh_t ch)
 
 	if (len > 0u)
 	{
+		s_byte[ch] = (uint16_t)(s_byte[ch] + len);
+
 		primask = __get_PRIMASK();
 		__disable_irq();
 
@@ -54,7 +55,7 @@ static void input_OnIdle(InputCh_t ch)
 
 			if (next == s_tail[ch])
 			{
-				s_drop[ch]++;			/* 环满：丢新字节，消费侧靠 s_drop 增量作废当前帧 */
+				s_drop[ch]++;			/* 环满：丢新字节，Step 侧由 lockCnt 反映 */
 				continue;
 			}
 
@@ -72,7 +73,7 @@ static void input_OnIdle(InputCh_t ch)
 }
 
 /**
- * @brief  USART1 中断（视觉）
+ * @brief  USART1 中断（视觉模块 1）
  * @note   只认 IDLE；清标志要求"先读 SR 再读 DR"，故先 GetITStatus 再 ReceiveData
  * @author camelliahm
  */
@@ -81,12 +82,25 @@ void USART1_IRQHandler(void)
 	if (USART_GetITStatus(USART1, USART_IT_IDLE) != RESET)
 	{
 		(void)USART_ReceiveData(USART1);
-		input_OnIdle(INPUT_VISION);
+		input_OnIdle(INPUT_VISION1);
 	}
 }
 
 /**
- * @brief  USART2 中断（二维码）
+ * @brief  USART3 中断（视觉模块 2）
+ * @author camelliahm
+ */
+void USART3_IRQHandler(void)
+{
+	if (USART_GetITStatus(USART3, USART_IT_IDLE) != RESET)
+	{
+		(void)USART_ReceiveData(USART3);
+		input_OnIdle(INPUT_VISION2);
+	}
+}
+
+/**
+ * @brief  USART2 中断（串口屏）
  * @author camelliahm
  */
 void USART2_IRQHandler(void)
@@ -94,11 +108,11 @@ void USART2_IRQHandler(void)
 	if (USART_GetITStatus(USART2, USART_IT_IDLE) != RESET)
 	{
 		(void)USART_ReceiveData(USART2);
-		input_OnIdle(INPUT_QRCODE);
+		input_OnIdle(INPUT_SCREEN);
 	}
 }
 
-/*---- 周期处理：拆行 + 在线判断（任务上下文） -----------------------*/
+/*---- 周期处理（任务上下文） ----------------------------------------*/
 
 /**
  * @brief  从环形缓冲取一个字节
@@ -118,77 +132,22 @@ static bool input_RingPop(InputCh_t ch, uint8_t *b)
 }
 
 /**
- * @brief  丢字节检测：把"静默丢弃"转成"整行作废 + 重同步"
- * @param  b   取出的字节
- * @retval true = 检查通过，字节可用
- * @note   丢字节必然让流失去帧边界，行内已无可靠同步点，故整行作废，只认帧头哨兵重新起头
+ * @brief  刷新通道在线标志与丢弃计数
+ * @param  ch 通道号
+ * @note   在线 = 最近收到过字节；上层应把"离线"解释为"数据不可信"，而非"没有目标"
  * @author camelliahm
  */
-static bool input_CheckLoss(InputCh_t ch, uint8_t b)
+static void input_RefreshState(InputCh_t ch)
 {
-	uint16_t drop = s_drop[ch];
+	uint16_t byte = s_byte[ch];
 
-	if (drop == s_syncDrop[ch])
+	if (byte != s_slot[ch].rxCnt)
 	{
-		return true;
+		s_slot[ch].lastTick = xTaskGetTickCount();
 	}
+	s_slot[ch].rxCnt   = byte;
+	s_slot[ch].lockCnt = s_drop[ch];
 
-	s_syncDrop[ch] = drop;						/* 本周期首次发现丢字节 */
-	s_lineLen[ch]  = 0u;						/* 丢掉被污染的半行 */
-	s_slot[ch].resyncCnt++;
-
-	/* 只有帧头哨兵才允许重新起头，否则一直丢弃直到下一个帧头 */
-	return (b == INPUT_SYNC_CHAR);
-}
-
-/**
- * @brief  把环形缓冲里的字节按行切分，填进槽位
- * @note   以 '\n' 为帧尾，'\r' 丢弃；超长行丢弃重来；槽位 line 始终存"最新一行"
- * @author camelliahm
- */
-static void input_ParseRing(InputCh_t ch)
-{
-	uint8_t b;
-
-	while (input_RingPop(ch, &b))
-	{
-		if (!input_CheckLoss(ch, b))
-		{
-			continue;
-		}
-
-		if (b == (uint8_t)'\n')
-		{
-			s_slot[ch].line[s_lineLen[ch]] = '\0';
-			s_slot[ch].lineLen  = s_lineLen[ch];
-			s_slot[ch].rxCnt++;
-			s_slot[ch].lastTick = xTaskGetTickCount();
-			s_slot[ch].fresh    = 1u;
-			s_lineLen[ch] = 0u;
-		}
-		else if (b != (uint8_t)'\r')
-		{
-			if (s_lineLen[ch] < (INPUT_LINE_MAX - 1u))
-			{
-				s_slot[ch].line[s_lineLen[ch]] = (char)b;
-				s_lineLen[ch]++;
-			}
-			else
-			{
-				s_lineLen[ch] = 0u;		/* 溢出：整行作废，等下一个 '\n' */
-				s_slot[ch].overCnt++;
-			}
-		}
-	}
-}
-
-/**
- * @brief  刷新通道在线标志
- * @note   超时即判离线——上层应把"离线"解释为"数据不可信"，而非"没有目标"
- * @author camelliahm
- */
-static void input_CheckOnline(InputCh_t ch)
-{
 	if ((xTaskGetTickCount() - s_slot[ch].lastTick) <= pdMS_TO_TICKS(INPUT_TIMEOUT_MS))
 	{
 		s_slot[ch].online = 1u;
@@ -199,11 +158,12 @@ static void input_CheckOnline(InputCh_t ch)
 	}
 }
 
-/*---- 对外接口 ----------------------------------------*/
+/*---- 对外接口 ----------------------------------------------------*/
 
 /**
  * @brief  输入汇聚层初始化
- * @note   USART1 = PA9/PA10（APB2），USART2 = PA2/PA3（APB1）；接收走 DMA + IDLE，无接收中断风暴
+ * @note   三条串口分别占 PA9/PA10、PB10/PB11、PA2/PA3；接收走 DMA + IDLE，无接收中断风暴。
+ *         本函数不做任何帧解析，返回后三条通道只把到达字节搬进环形缓冲
  * @author camelliahm
  */
 void input_Init(void)
@@ -214,9 +174,10 @@ void input_Init(void)
 	NVIC_InitTypeDef n;
 	uint8_t i;
 
-	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA | RCC_AHB1Periph_DMA1 | RCC_AHB1Periph_DMA2, ENABLE);
+	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA | RCC_AHB1Periph_GPIOB |
+						   RCC_AHB1Periph_DMA1 | RCC_AHB1Periph_DMA2, ENABLE);
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
-	RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE);
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2 | RCC_APB1Periph_USART3, ENABLE);
 
 	/* PA2/PA3 → USART2，PA9/PA10 → USART1 */
 	g.GPIO_Pin   = GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_9 | GPIO_Pin_10;
@@ -226,10 +187,16 @@ void input_Init(void)
 	g.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_Init(GPIOA, &g);
 
+	/* PB10/PB11 → USART3 */
+	g.GPIO_Pin   = GPIO_Pin_10 | GPIO_Pin_11;
+	GPIO_Init(GPIOB, &g);
+
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource2,  GPIO_AF_USART2);
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource3,  GPIO_AF_USART2);
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource9,  GPIO_AF_USART1);
 	GPIO_PinAFConfig(GPIOA, GPIO_PinSource10, GPIO_AF_USART1);
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource10, GPIO_AF_USART3);
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource11, GPIO_AF_USART3);
 
 	for (i = 0u; i < INPUT_NUM; i++)
 	{
@@ -262,7 +229,7 @@ void input_Init(void)
 		DMA_Init(s_stream[i], &d);
 
 		/* 中断：只开 IDLE，不调 FreeRTOS API，故抢占优先级按普通外设给 5 */
-		n.NVIC_IRQChannel                   = (i == INPUT_VISION) ? USART1_IRQn : USART2_IRQn;
+		n.NVIC_IRQChannel                   = s_irqn[i];
 		n.NVIC_IRQChannelPreemptionPriority = 5;
 		n.NVIC_IRQChannelSubPriority        = 0;
 		n.NVIC_IRQChannelCmd                = ENABLE;
@@ -273,11 +240,21 @@ void input_Init(void)
 		USART_Cmd(s_usart[i], ENABLE);
 		DMA_Cmd(s_stream[i], ENABLE);
 	}
+
+	visionSlot.online      = 0u;
+	visionSlot.fresh       = 0u;
+	visionSlot.count       = 0u;
+	visionSlot.seq         = 0u;
+	visionSlot.rxCnt       = 0u;
+	visionSlot.errCnt      = 0u;
+	visionSlot.task.taskId = VISION_TASK_ID_NONE;
+	visionSlot.lastTick    = xTaskGetTickCount();
 }
 
 /**
- * @brief  周期处理：拆行并刷新在线标志
- * @note   暂未接入控制环；接入方式见 README.md。须与 input_TakeLine() 在同一任务上下文调用
+ * @brief  周期处理：刷新三条通道的在线标志与丢弃计数
+ * @note   解析尚未实现：字节只停在环形缓冲里，由 input_Read() 取用，无人取用时 lockCnt 会持续增长。
+ *         待各通道帧格式定稿后，在此按通道加入解析（视觉模块 2 负责填 visionSlot）
  * @author camelliahm
  */
 void input_Step(void)
@@ -286,9 +263,67 @@ void input_Step(void)
 
 	for (i = 0u; i < INPUT_NUM; i++)
 	{
-		input_ParseRing((InputCh_t)i);
-		input_CheckOnline((InputCh_t)i);
+		input_RefreshState((InputCh_t)i);
 	}
+}
+
+/**
+ * @brief  取走原始字节
+ * @param  ch  通道号
+ * @param  dst 目标缓冲
+ * @param  max 最多拷贝字节数
+ * @retval 实际拷贝的字节数；0 = 无数据或参数非法
+ * @note   与中断侧构成单生产者/单消费者；须与 input_Step() 在同一任务上下文调用
+ * @author camelliahm
+ */
+uint16_t input_Read(InputCh_t ch, uint8_t *dst, uint16_t max)
+{
+	uint16_t n = 0u;
+
+	if ((ch >= INPUT_NUM) || (dst == NULL))
+	{
+		return 0u;
+	}
+
+	while ((n < max) && input_RingPop(ch, &dst[n]))
+	{
+		n++;
+	}
+
+	return n;
+}
+
+/**
+ * @brief  阻塞式发送
+ * @param  ch  通道号
+ * @param  src 数据起始
+ * @param  len 长度
+ * @retval 实际发出的字节数；0 = 参数非法
+ * @note   忙等 TXE/TC，不可在中断或临界区内调用；总线未接时可能长时间阻塞
+ * @author camelliahm
+ */
+uint16_t input_Write(InputCh_t ch, const uint8_t *src, uint16_t len)
+{
+	uint16_t i;
+
+	if ((ch >= INPUT_NUM) || (src == NULL))
+	{
+		return 0u;
+	}
+
+	for (i = 0u; i < len; i++)
+	{
+		while (USART_GetFlagStatus(s_usart[ch], USART_FLAG_TXE) == RESET)
+		{
+		}
+		USART_SendData(s_usart[ch], src[i]);
+	}
+
+	while (USART_GetFlagStatus(s_usart[ch], USART_FLAG_TC) == RESET)
+	{
+	}
+
+	return len;
 }
 
 /**
@@ -301,41 +336,95 @@ const InputSlot_t *input_GetSlot(InputCh_t ch)
 	return (ch < INPUT_NUM) ? &s_slot[ch] : NULL;
 }
 
+/*---- 视觉模块 2 帧槽位 --------------------------------------------*/
+
 /**
- * @brief  取走最新一行
- * @param  ch   通道号
- * @param  dst  目标缓冲
- * @param  size 目标缓冲大小（含 '\0'）
- * @retval true = 取到一行
+ * @brief  周期处理：刷新视觉槽位在线标志
+ * @note   解析未实现，lastTick 只在收到有效帧时才会更新，故当前恒判离线（= 数据不可信）
  * @author camelliahm
  */
-bool input_TakeLine(InputCh_t ch, char *dst, uint16_t size)
+void vision_Step(void)
 {
-	uint16_t i;
+	if ((xTaskGetTickCount() - visionSlot.lastTick) <= pdMS_TO_TICKS(VISION_FRAME_TIMEOUT_MS))
+	{
+		visionSlot.online = 1u;
+	}
+	else
+	{
+		visionSlot.online = 0u;
+	}
+}
 
-	if ((ch >= INPUT_NUM) || (dst == NULL) || (size == 0u) || (s_slot[ch].fresh == 0u))
+/**
+ * @brief  取走一帧障碍物
+ * @param  dst 目标缓冲（须至少有 max 条容量）
+ * @param  max 缓冲区可容纳条数
+ * @retval 实际拷贝的条数；0 = 无新帧
+ * @note   取走后清 fresh，因此同一帧只会被消费一次
+ * @author camelliahm
+ */
+uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max)
+{
+	uint8_t n;
+	uint8_t i;
+
+	if ((dst == NULL) || (max == 0u) || (visionSlot.fresh == 0u))
+	{
+		return 0u;
+	}
+
+	n = visionSlot.count;
+	if (n > max)
+	{
+		n = max;
+	}
+
+	for (i = 0u; i < n; i++)
+	{
+		dst[i] = visionSlot.obst[i];
+	}
+
+	visionSlot.fresh = 0u;
+
+	return n;
+}
+
+/**
+ * @brief  取走任务号（二维码）
+ * @param  dst 目标结构
+ * @retval true = 取到
+ * @note   取走后槽位置回 VISION_TASK_ID_NONE，因此同一任务号只会被消费一次
+ * @author camelliahm
+ */
+bool vision_TakeTask(VisionTask_t *dst)
+{
+	if ((dst == NULL) || (visionSlot.task.taskId == VISION_TASK_ID_NONE))
 	{
 		return false;
 	}
 
-	for (i = 0u; (i < s_slot[ch].lineLen) && (i < (uint16_t)(size - 1u)); i++)
-	{
-		dst[i] = s_slot[ch].line[i];
-	}
-	dst[i] = '\0';
+	dst->taskId = visionSlot.task.taskId;
+	visionSlot.task.taskId = VISION_TASK_ID_NONE;
 
-	s_slot[ch].fresh = 0u;
 	return true;
 }
 
 /**
- * @brief  丢弃未读帧（只清 fresh，不取用）
+ * @brief  只读槽位
  * @author camelliahm
  */
-void input_ClearLine(InputCh_t ch)
+const VisionSlot_t *vision_GetSlot(void)
 {
-	if (ch < INPUT_NUM)
-	{
-		s_slot[ch].fresh = 0u;
-	}
+	return (const VisionSlot_t *)&visionSlot;
+}
+
+/**
+ * @brief  查询有效识别距离
+ * @retval 距离(mm)；0 = 未知（未标定）
+ * @note   0 是"不可信"哨兵而非"距离为零"，调用方不得据此放行速度
+ * @author camelliahm
+ */
+int32_t vision_GetRangeMM(void)
+{
+	return (int32_t)VISION_RANGE_MM;
 }

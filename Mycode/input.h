@@ -3,50 +3,103 @@
 
 #include "chassis.h"
 
-/* 输入汇聚层：两路只收串口（USART1 = 视觉模块 1，USART2 = 二维码），详见 README.md */
+/* 输入汇聚层：三条串口通道 + 视觉模块 2 的帧槽位；分层与扩展指引见工程根目录 README.md */
 
-/* USART1：PA9(TX)/PA10(RX)，挂 APB2，DMA2 Stream5 Ch4 */
-/* USART2：PA2(TX)/PA3(RX)，挂 APB1，DMA1 Stream5 Ch4 */
-/* ⚠ 不能用 USART6：它的 PC6/PC7 与舵机 PWM 是同一对引脚 */
-/* ⚠ USART3(PB10/PB11) 已划给"视觉模块 2"（Mycode/vision.c，二进制结构帧即障碍物+任务信息）； */
-/*   本层的"视觉"通道是**视觉模块 1**（文本行），两者是独立硬件，不要合并 */
-
+/* USART1：PA9(TX)/PA10(RX)，APB2，DMA2 Stream5 Ch4 —— 视觉模块 1（物块颜色）
+ * USART3：PB10(TX)/PB11(RX)，APB1，DMA1 Stream3 Ch4 —— 视觉模块 2（障碍物 + 任务号）
+ * USART2：PA2(TX)/PA3(RX)，APB1，DMA1 Stream5 Ch4 —— 串口屏（骨架，协议未定）
+ * ⚠ 不用 USART6：它的 PC6/PC7 与舵机 PWM 是同一对引脚 */
 typedef enum {
-	INPUT_VISION = 0,	/* USART1 → 视觉模块 1（文本行） */
-	INPUT_QRCODE,		/* USART2 → 二维码 */
+	INPUT_VISION1 = 0,	/* USART1 → 视觉模块 1 */
+	INPUT_VISION2,		/* USART3 → 视觉模块 2 */
+	INPUT_SCREEN,		/* USART2 → 串口屏（骨架） */
 	INPUT_NUM
 } InputCh_t;
 
-#define INPUT_LINE_MAX		(64u)	/* 单行缓冲（含结尾 '\0'） */
-#define INPUT_RX_BUF		(256u)	/* DMA 接收缓冲 */
-#define INPUT_RING_SIZE		(512u)	/* 每通道环形缓冲（2 的幂） */
-#define INPUT_TIMEOUT_MS	(500u)	/* 超过此时长无完整帧判离线 */
+#define INPUT_BAUD			(115200u)	/* 三通道同波特率；串口屏若需单独取值再拆成数组 */
+#define INPUT_RX_BUF		(256u)		/* 每通道 DMA 接收缓冲 */
+#define INPUT_RING_SIZE		(512u)		/* 每通道环形缓冲（2 的幂） */
+#define INPUT_TIMEOUT_MS	(500u)		/* 超过此时长未收到字节判离线 */
 
-/* 每通道的输入槽位，形状同 ChassisMotor_t：值 + 新鲜度 + 丢帧计数 */
+/* 每通道接收状态。⚠ 三条通道的帧格式均未定，当前只统计到达字节，不做任何解析 */
 typedef struct {
-	uint8_t	 online;				/* 1 = 最后一条完整帧未超时 */
-	uint32_t lastTick;				/* 最后收到完整帧的 tick */
-	uint16_t rxCnt;					/* 累计完整帧数 */
-	uint16_t resyncCnt;				/* 环形缓冲丢失字节引发的重同步次数 */
-	uint16_t overCnt;				/* 行超长导致的整行丢弃次数 */
-	char	 line[INPUT_LINE_MAX];	/* 最近一条完整帧（ASCII，'\0' 结尾） */
-	uint16_t lineLen;
-	uint8_t	 fresh;					/* 1 = 有新帧待上层取走 */
+	uint8_t	 online;			/* 1 = 最后收到字节未超时 */
+	uint32_t lastTick;			/* 最后收到字节的 tick */
+	uint16_t rxCnt;				/* 累计到达字节数 */
+	uint16_t lockCnt;			/* 环形缓冲满导致的丢弃字节数 */
 } InputSlot_t;
 
-/* 初始化（时钟、GPIO、DMA、USART、NVIC；接收随即开始） */
+/* 初始化三条串口（时钟/GPIO/DMA/NVIC）；返回后接收立即开始 */
 void input_Init(void);
 
-/* 周期处理：拆行 + 刷新 online。暂未接入控制环 */
+/* 周期处理：刷新通道状态。暂未接入控制环 */
 void input_Step(void);
 
-/* 只读槽位（诊断 / 直接取用） */
+/* 取走原始字节：从环形缓冲拷最多 max 字节，返回实际拷贝数 */
+uint16_t input_Read(InputCh_t ch, uint8_t *dst, uint16_t max);
+
+/* 阻塞式发送：逐字节等 TXE，返回实际发出的字节数 */
+uint16_t input_Write(InputCh_t ch, const uint8_t *src, uint16_t len);
+
+/* 只读槽位（诊断） */
 const InputSlot_t *input_GetSlot(InputCh_t ch);
 
-/* 取走一行：有未读帧时拷进 dst 并清 fresh，返回 true */
-bool input_TakeLine(InputCh_t ch, char *dst, uint16_t size);
+/*---- 视觉模块 2 帧槽位（内容留空，见 README.md） --------------------*/
 
-/* 丢弃未读帧（不取用，只清 fresh） */
-void input_ClearLine(InputCh_t ch);
+/* ⚠ 帧头/帧尾/校验/字段量纲全是占位约定，解析尚未实现；定稿后只改本段宏与 input.c 的解析 */
+#define VISION_FRAME_HEAD		(0xA5u)		/* ⚠ 占位 */
+#define VISION_FRAME_TAIL		(0x5Au)		/* ⚠ 占位 */
+#define VISION_OBST_MAX			(8u)		/* 一帧障碍物条数上限，改大需核对 VISION_RX_BUF */
+#define VISION_FRAME_TIMEOUT_MS	(500u)		/* 超过此时长无完整帧即判离线 */
+
+typedef struct {
+	int16_t x;				/* 障碍中心横向(车体坐标, mm)  ⚠ 待定 */
+	int16_t y;				/* 障碍中心纵向(车体坐标, mm)  ⚠ 待定 */
+	int16_t width;			/* 障碍宽度(mm)                ⚠ 待定 */
+	uint8_t confidence;		/* 置信度 0~100                ⚠ 待定 */
+} VisionObst_t;
+
+/* 任务号（二维码）：视觉模块 2 已解析成整数后上报；⚠ 帧内承载位置待帧格式确定 */
+#define VISION_TASK_ID_NONE		(0xFFu)		/* 无任务信息哨兵 */
+typedef struct {
+	uint8_t taskId;			/* 任务号；VISION_TASK_ID_NONE = 本帧无任务 */
+} VisionTask_t;
+
+/* 视觉模块 2 有效识别距离(mm)，实测 50 cm；⚠ 0 = 未知（哨兵），调用方不得据此放行速度 */
+#define VISION_RANGE_MM			(500)
+
+/* 视场角(度) / 安装高度(mm) / 俯角(度)：⚠ 均留空，影响障碍物反投影与盲区判定 */
+#define VISION_FOV_DEG			(0.0f)		/* ⚠ 留空：0 = 未知 */
+#define VISION_MOUNT_H_MM		(0.0f)		/* ⚠ 留空：0 = 未知 */
+#define VISION_MOUNT_PITCH_DEG	(0.0f)		/* ⚠ 留空：0 = 未知 */
+
+typedef struct {
+	uint8_t  online;					/* 1 = 最后完整帧未超时 */
+	uint8_t  fresh;						/* 1 = 有新帧待上层取走 */
+	uint8_t  count;						/* 本帧障碍物条数 */
+	uint8_t  seq;						/* 帧序号，用于丢帧检测 */
+	uint32_t lastTick;					/* 最后收到完整帧的 tick */
+	uint16_t rxCnt;						/* 累计完整帧数 */
+	uint16_t errCnt;					/* 校验/长度错误帧数 */
+	VisionObst_t obst[VISION_OBST_MAX];	/* 障碍物列表（本帧快照） */
+	VisionTask_t task;					/* 任务号（二维码） */
+} VisionSlot_t;
+
+extern __IO VisionSlot_t visionSlot;
+
+/* 周期处理：刷新视觉槽位 online；解析未实现期间恒为离线 */
+void vision_Step(void);
+
+/* 取走一帧：返回条数(0 = 无)，取后清 fresh */
+uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max);
+
+/* 取走任务号：返回 true = 取到，取后置回 VISION_TASK_ID_NONE */
+bool vision_TakeTask(VisionTask_t *dst);
+
+/* 只读槽位（诊断） */
+const VisionSlot_t *vision_GetSlot(void);
+
+/* 视距查询：返回 mm；0 = 未知（未标定），须按"不可信"处理 */
+int32_t vision_GetRangeMM(void);
 
 #endif

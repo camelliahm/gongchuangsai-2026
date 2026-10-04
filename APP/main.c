@@ -3,7 +3,6 @@
 #include "chassis.h"
 #include "servo.h"
 #include "input.h"
-#include "vision.h"
 #include "oled.h"
 #include "nav.h"
 #include "FreeRTOS.h"
@@ -83,8 +82,7 @@ static void ALL_Init(void)
 {
 	board_init();                          // 硬件初始化（NVIC、时钟、GPIO、CAN）
 	servo_Init();                          // 三路舵机 PWM（TIM3 CH1~CH3）
-	input_Init();                          // 视觉模块1 / 二维码（USART1 / USART2）
-	vision_Init();                         // 视觉模块2（USART3）：障碍物 + 任务信息
+	input_Init();                          // 视觉模块1 / 视觉模块2 / 串口屏（USART1 / USART3 / USART2）
 	oled_Init();                           // OLED 状态屏（软件 I2C）
 	nav_Init();                            // 编排层：装载默认地图，不自动启动
 	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁
