@@ -24,8 +24,11 @@ static volatile uint16_t s_byte[INPUT_NUM];	/* 累计到达字节数 */
 /* 通道状态 */
 static InputSlot_t s_slot[INPUT_NUM];
 
-/* 视觉模块 2 的帧槽位；帧格式未定，当前只被 input_Init() 归零 */
+/* 视觉模块 2 的帧槽位与组帧状态（帧格式见 input.h 视觉段） */
 __IO VisionSlot_t visionSlot;
+static uint8_t  s_visBuf[VISION_FRAME_MAX];
+static uint16_t s_visLen;		/* 已收字节数（含帧头） */
+static uint16_t s_visTotal;		/* 本帧总长 = LEN + 5；0 = 尚未收到长度字节 */
 
 /*---- 中断服务：IDLE 触发，把本帧从 DMA 缓冲搬进环形缓冲 --------------*/
 
@@ -242,22 +245,25 @@ void input_Init(void)
 		DMA_Cmd(s_stream[i], ENABLE);
 	}
 
-	visionSlot.online      = 0u;
-	visionSlot.fresh       = 0u;
-	visionSlot.count       = 0u;
-	visionSlot.seq         = 0u;
-	visionSlot.rxCnt       = 0u;
-	visionSlot.errCnt      = 0u;
-	visionSlot.task.taskId = VISION_TASK_ID_NONE;
-	visionSlot.lastTick    = xTaskGetTickCount();
+	visionSlot.online       = 0u;
+	visionSlot.lastTick     = xTaskGetTickCount();
+	visionSlot.rxCnt        = 0u;
+	visionSlot.errCnt       = 0u;
+	visionSlot.obstFresh    = 0u;
+	visionSlot.count        = 0u;
+	visionSlot.taskFresh    = 0u;
+	visionSlot.task.len     = 0u;
+	visionSlot.task.code[0] = '\0';
+	s_visLen                = 0u;
+	s_visTotal              = 0u;
 
 	screen_Init();			// 串口屏软件槽位归零（USART2 硬件已在上面的循环里配好）
 }
 
 /**
  * @brief  周期处理：刷新三条通道的在线标志与丢弃计数
- * @note   本模块不做解析：字节只停在环形缓冲里、由 input_Read() 取用，无人取用时 lockCnt 会持续增长。
- *         串口屏通道由 screen_Step() 消费；两路视觉的解析待帧格式定稿后再加
+ * @note   本模块不做解析：字节只停在环形缓冲里、由各协议模块取用，无人取用时 lockCnt 会持续增长。
+ *         串口屏通道由 screen_Step() 消费，视觉模块 2 通道由 vision_Step() 消费
  * @author camelliahm
  */
 void input_Step(void)
@@ -339,14 +345,150 @@ const InputSlot_t *input_GetSlot(InputCh_t ch)
 	return (ch < INPUT_NUM) ? &s_slot[ch] : NULL;
 }
 
-/*---- 视觉模块 2 帧槽位 --------------------------------------------*/
+/*---- 视觉模块 2 帧解析（匿名协议精简帧） ----------------------------*/
 
 /**
- * @brief  周期处理：刷新视觉槽位在线标志
- * @note   解析未实现，lastTick 只在收到有效帧时才会更新，故当前恒判离线（= 数据不可信）
+ * @brief  丢弃当前半帧，重新等帧头
  * @author camelliahm
  */
-void vision_Step(void)
+static void vision_ResetFrame(void)
+{
+	s_visLen   = 0u;
+	s_visTotal = 0u;
+}
+
+/**
+ * @brief  把任务码原样存入槽位
+ * @param  data 数据内容起始  len 数据内容长度
+ * @note   存 ASCII 原文不做数值解析；超长截断但仍置 taskFresh
+ * @author camelliahm
+ */
+static void vision_OnTask(const uint8_t *data, uint8_t len)
+{
+	uint8_t n = len;
+	uint8_t i;
+
+	if (n > (VISION_TASK_CODE_MAX - 1u))
+	{
+		n = (uint8_t)(VISION_TASK_CODE_MAX - 1u);
+	}
+
+	for (i = 0u; i < n; i++)
+	{
+		visionSlot.task.code[i] = (char)data[i];
+	}
+	visionSlot.task.code[n] = '\0';
+	visionSlot.task.len     = n;
+	visionSlot.taskFresh    = 1u;
+}
+
+/**
+ * @brief  校验并分发一个完整帧
+ * @param  f 长度为 LEN+5 的完整帧，f[0] = 帧头
+ * @note   和校验覆盖帧头到 DATA 结束共 LEN+3 字节；校验不过只计数，不进槽位
+ * @author camelliahm
+ */
+static void vision_Dispatch(const uint8_t *f)
+{
+	uint8_t  len = f[2];
+	uint8_t  sum = 0u;
+	uint8_t  add = 0u;
+	uint16_t i;
+
+	for (i = 0u; i < ((uint16_t)len + 3u); i++)
+	{
+		sum = (uint8_t)(sum + f[i]);
+		add = (uint8_t)(add + sum);
+	}
+
+	if ((sum != f[(uint16_t)len + 3u]) || (add != f[(uint16_t)len + 4u]))
+	{
+		visionSlot.errCnt++;
+		return;
+	}
+
+	switch (f[1])
+	{
+	case VISION_ID_TASK:
+		vision_OnTask(&f[3], len);
+		break;
+
+	case VISION_ID_OBST:
+		break;					/* 数据内容未定：只计帧数，不解析 */
+
+	default:
+		visionSlot.errCnt++;	/* 功能码未定义 */
+		return;
+	}
+
+	visionSlot.rxCnt++;
+	visionSlot.lastTick = xTaskGetTickCount();
+}
+
+/**
+ * @brief  逐字节组帧
+ * @param  b 新到达的字节
+ * @note   帧头起头，收满 LEN+5 字节即校验；帧头前的杂散字节与长度越界的帧都计入 errCnt
+ * @author camelliahm
+ */
+static void vision_Feed(uint8_t b)
+{
+	if (s_visLen == 0u)
+	{
+		if (b == VISION_FRAME_HEAD)
+		{
+			s_visBuf[0] = b;
+			s_visLen    = 1u;
+		}
+		else
+		{
+			visionSlot.errCnt++;
+		}
+		return;
+	}
+
+	s_visBuf[s_visLen] = b;
+	s_visLen++;
+
+	if (s_visLen == 3u)
+	{
+		s_visTotal = (uint16_t)s_visBuf[2] + VISION_FRAME_OVERHEAD;
+
+		if (s_visTotal > VISION_FRAME_MAX)
+		{
+			visionSlot.errCnt++;	/* 长度越界：丢弃本帧，等下一个帧头 */
+			vision_ResetFrame();
+		}
+		return;
+	}
+
+	if ((s_visTotal != 0u) && (s_visLen >= s_visTotal))
+	{
+		vision_Dispatch(s_visBuf);
+		vision_ResetFrame();
+	}
+}
+
+/**
+ * @brief  从视觉通道环形缓冲取字节并组帧
+ * @author camelliahm
+ */
+static void vision_Parse(void)
+{
+	uint8_t b;
+
+	while (input_Read(INPUT_VISION2, &b, 1u) == 1u)
+	{
+		vision_Feed(b);
+	}
+}
+
+/**
+ * @brief  刷新视觉槽位在线标志
+ * @note   在线 = 最近收到过校验通过的完整帧
+ * @author camelliahm
+ */
+static void vision_Online(void)
 {
 	if ((xTaskGetTickCount() - visionSlot.lastTick) <= pdMS_TO_TICKS(VISION_FRAME_TIMEOUT_MS))
 	{
@@ -359,11 +501,21 @@ void vision_Step(void)
 }
 
 /**
- * @brief  取走一帧障碍物
- * @param  dst 目标缓冲（须至少有 max 条容量）
- * @param  max 缓冲区可容纳条数
+ * @brief  周期处理：收帧 + 校验 + 刷新在线标志
+ * @note   须与 input_Step() 一样每周期调用；当前无调用点（未接入控制环）
+ * @author camelliahm
+ */
+void vision_Step(void)
+{
+	vision_Parse();
+	vision_Online();
+}
+
+/**
+ * @brief  取走一帧避障数据
+ * @param  dst 目标缓冲（须至少有 max 条容量）  max 缓冲区可容纳条数
  * @retval 实际拷贝的条数；0 = 无新帧
- * @note   取走后清 fresh，因此同一帧只会被消费一次
+ * @note   避障帧的数据内容未定，当前不会置 obstFresh，故恒返回 0
  * @author camelliahm
  */
 uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max)
@@ -371,7 +523,7 @@ uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max)
 	uint8_t n;
 	uint8_t i;
 
-	if ((dst == NULL) || (max == 0u) || (visionSlot.fresh == 0u))
+	if ((dst == NULL) || (max == 0u) || (visionSlot.obstFresh == 0u))
 	{
 		return 0u;
 	}
@@ -387,27 +539,27 @@ uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max)
 		dst[i] = visionSlot.obst[i];
 	}
 
-	visionSlot.fresh = 0u;
+	visionSlot.obstFresh = 0u;
 
 	return n;
 }
 
 /**
- * @brief  取走任务号（二维码）
+ * @brief  取走任务码
  * @param  dst 目标结构
  * @retval true = 取到
- * @note   取走后槽位置回 VISION_TASK_ID_NONE，因此同一任务号只会被消费一次
+ * @note   取走后清 taskFresh，因此同一个任务码只会被消费一次
  * @author camelliahm
  */
 bool vision_TakeTask(VisionTask_t *dst)
 {
-	if ((dst == NULL) || (visionSlot.task.taskId == VISION_TASK_ID_NONE))
+	if ((dst == NULL) || (visionSlot.taskFresh == 0u))
 	{
 		return false;
 	}
 
-	dst->taskId = visionSlot.task.taskId;
-	visionSlot.task.taskId = VISION_TASK_ID_NONE;
+	*dst = visionSlot.task;
+	visionSlot.taskFresh = 0u;
 
 	return true;
 }

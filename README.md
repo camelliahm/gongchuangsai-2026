@@ -36,7 +36,7 @@
 | `Mycode/chassis_drive.c/.h` | **底盘驱动层**：四轮动作 / 反馈 / 看门狗 / 停稳判断 + 里程计 / 麦轮逆解 / 姿态环 | 状态机迁移、升降轴 |
 | `Mycode/auxiliary.c/.h` | **辅助机构层**：底盘四轮之外的所有执行机构（现为升降轴） | 状态机迁移、底盘四轮 |
 | `Mycode/nav.c/.h` | **编排层（任务层）**：航段序列 → 逐周期的底盘速度与目标航向 | 状态机迁移、直接下发 CAN |
-| `Mycode/input.c/.h` | **输入汇聚层**：三条串口的硬件配置与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ 视觉2 帧槽位；⚠ 只搬字节，不做帧解析 | 帧解析、执行机构、状态机迁移 |
+| `Mycode/input.c/.h` | **输入汇聚层**：三条串口的硬件配置与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ **视觉模块 2 的帧解析**（匿名协议精简帧）；视觉1 的解析仍留空 | 帧解析、执行机构、状态机迁移 |
 | `Mycode/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
 | `Mycode/servo.c/.h` | **执行机构（PWM）**：3 路 50Hz 舵机（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8） | 状态机迁移、底盘四轮 |
 
@@ -56,8 +56,10 @@
 > （`screen` 无独立初始化入口，其软件槽位由 `input_Init()` 末尾调 `screen_Init()` 归零），但
 > **`nav_Step()` / `input_Step()` / `screen_Step()` / `vision_Step()` / `oled_Step()` 都没有调用点，
 > 舵机也无人下达角度**。它们现在是"装好了但没接线的部件"——接入位置与前置条件见 **§6**。
+> ⚠ 也正因如此，`vision_Step()` 与整条视觉解析链当前被链接器当未引用段丢弃，
+> **`Program Size` 的 Code 增量不代表它的真实体积**。
 >
-> **`input` 内的视觉模块 2 仍未定稿**（见 §6）：通信帧格式、任务号承载位置与视场角 / 安装姿态。
+> **视觉模块 2 仍有两项内容未定稿**（见 §6）：避障帧（`0xF3`）的数据内容、视场角 / 安装姿态。
 > 未定稿项的标定进度记在 `MEMORY.md`。
 
 ---
@@ -375,7 +377,7 @@ Data[7]     保留填 0
 | **改状态迁移**<br>加新状态、改转移条件 | `chassis.c` | 只动 `s_transTable[]` 和 `chassis_OnEnter()` 的分支 |
 | **改协议**<br>新指令码、新地址 | `chassis.h` + `BSP/Emm_V5.c` | 功能码枚举在 `chassis.h`，协议字节组装在 `Emm_V5.c` |
 | **改任务编排**<br>地图、动作序列 | `nav.c` | `s_defaultMap[]` 换成赛题路线；接入点见 §6 |
-| **加数据源**<br>第二个相机、新传感器串口 | `input.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；**解析定稿后加在 `input_Step()` 内**（视觉模块 2 的解析负责填 `visionSlot`） |
+| **加数据源**<br>第二个相机、新传感器串口 | `input.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉模块 2 见 `vision_Step()`） |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
 | **接避障层**<br>反应式优先级抑制 | 新建 `avoid.c`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
 | **改状态屏内容** | `oled.c` | `oled_ShowStatus()` |
@@ -388,22 +390,36 @@ Data[7]     保留填 0
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
 | `nav` | 在 `chassis_ControlStep()` 的 `if (state != CHS_RUNNING) return;` **之后**、`chassis_DriveStep()` **之前**加 `nav_Step()` | **里程计必须先标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号仍是占位值）；另需把 `chassis_DriveStep()` 姿态环的给定 `0.0f` 换成 `nav_GetTargetYaw()`，转向才会生效 |
-| `input`（三条串口） | 在控制环里加 `input_Step()`（200 Hz 已高于任何相机帧率），另按需加 `vision_Step()` | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 两路视觉的帧格式未定稿前字节只停在环形缓冲、由 `input_Read()` 取用；无人取用时 `lockCnt` 会持续增长 |
-| `screen`（串口屏协议） | 加 `screen_Step()`（须与 `input_Step()` 同一任务上下文——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ **必须与 `input_Step()` 成对接**：`screen` 是 `input` 的消费者，只接 `input_Step()` 而漏接 `screen_Step()` 会让屏上报的字节一直堆在环形缓冲里 |
+| `input`（三条串口） | 在控制环里加 `input_Step()`（200 Hz 已高于任何相机帧率）；视觉模块 2 另加 `vision_Step()` | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 视觉1 的解析尚未实现、其字节无人取用，`lockCnt` 会持续增长（视觉2 由 `vision_Step()` 消费、串口屏由 `screen_Step()` 消费） |
+| `screen`（串口屏协议） | 加 `screen_Step()`（须在**任务上下文**调用——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ 约束是**单向**的：漏接 `screen_Step()` 会让屏上报的字节堆在环形缓冲里；反过来漏接 `input_Step()` 只丢 USART2 通道的 `rxCnt / lockCnt` 诊断（`screen_Step()` 自带在线判断，可独立工作） |
 | `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
 | `servo` | 由上层直接调 `servo_SetAngle()` / `servo_SetPulse()` | 无。若要受安全闸门约束，需在 `chassis_OnEnter()` 的 IDLE / FAULT / ESTOP 分支登记失能 |
 
 > `nav_Step()` 放在 RUNNING 闸门**之后**是关键：非 RUNNING 时它根本不会被执行，
 > 于是急停、故障、停车的保护全部免费继承，任务层不需要任何额外的安全判断。
 
-### 视觉模块 2（`input.c` 的视觉段）：三项未定稿
+### 视觉模块 2（`input.c` 的视觉段）：帧格式已定稿，两项内容留空
 
-视觉模块 2 以"**接口与流程完整、内容格式留空**"的形态落地。留空的是**内容**，不是结构：
+**通信帧格式 = 匿名（ANO）通信协议 V7 的精简帧 —— 去掉了目标地址 `D_ADDR`**，
+其余字段与校验算法原样保留：
+
+| 帧头 | 功能码 | 数据长度 | 数据内容 | 和校验 | 附加校验 |
+| --- | --- | --- | --- | --- | --- |
+| `0xAA`（固定） | `ID` | `LEN` | `DATA[LEN]`（小端） | `SC` | `AC` |
+
+- 总长 `LEN + 5`；`SC` 在下标 `LEN+3`、`AC` 在下标 `LEN+4`。
+- `SC` = 从帧头起逐字节累加取低 8 位，**累加范围是帧头到 DATA 结束共 `LEN+3` 字节**；
+  `AC` = 每累加一字节就把当时的 `SC` 再累加一次，取低 8 位。
+- 帧由 `vision_Feed()` 逐字节拼装，收满即校验；**校验不过只计 `errCnt`，不进槽位**。
+- 功能码：`0xF3` 避障信息、`0xF4` 任务码（二维码）。`0xF4` 的数据内容是**十进制数字串原文** ——
+  如任务码 `156+123+516+231` 则 DATA 发 `156123516231`（12 字节 ASCII）；
+  槽位按原文存进 `VisionTask_t.code[16]` + `len`，**MCU 侧不做分组解析**。
+
+仍留空的是**内容**（结构已就位）：
 
 | 留空项 | 位置 | 现状 | 填写时机 |
 | --- | --- | --- | --- |
-| **通信帧格式** | `input.h` 视觉段 + `input_Step()` 内的解析（**尚未实现**） | 帧头 `0xA5` / 帧尾 `0x5A` / `VisionObst_t` 字段量纲，**全是占位约定** | 视觉模块 2 规格确定后 |
-| **任务号承载位置** | `VisionTask_t` | 语义已定（整数任务号，`uint8_t`，`VISION_TASK_ID_NONE` = 本帧无任务），**帧内字节位置未定** | 视觉模块 2 规格确定后 |
+| **避障帧（`0xF3`）的数据内容** | `VisionObst_t` / `VISION_OBST_MAX` | 收到即计帧数，**不解析**，故 `obstFresh` 恒为 0 | 避障帧字段量纲确定后 |
 | **视场角 / 安装姿态** | `VISION_FOV_DEG` / `VISION_MOUNT_H_MM` / `VISION_MOUNT_PITCH_DEG` | `0` = 未标定 | 实测后 |
 
 **视距已实测**：`VISION_RANGE_MM = 500`（50 cm）。车速上限由它反推 ——
@@ -421,9 +437,9 @@ Data[7]     保留填 0
 | --- | --- | --- | --- |
 | 通道 | `INPUT_VISION1` | `INPUT_VISION2` | `INPUT_SCREEN` |
 | 串口 | USART1（PA9/PA10，DMA2 Stream5） | USART3（PB10/PB11，DMA1 Stream3） | USART2（PA2/PA3，DMA1 Stream5） |
-| 承载内容 | 物块颜色 | 障碍物列表 + 任务号（二维码），视距 50 cm | 控件指令下发 + 触摸 / 变量事件上报 |
-| 协议实现 | `input.c` 视觉段（尚无解析） | `input.c` 视觉段（尚无解析） | `screen.c`（TJC 协议已落地） |
-| 状态 | 已落地，未接入控制环；帧格式留空 | 同左 | 协议已落地，未接入控制环（`screen_Step()` 无调用点） |
+| 承载内容 | 物块颜色 | 障碍物（`0xF3`）+ 任务码（二维码，`0xF4`），视距 50 cm | 控件指令下发 + 触摸 / 变量事件上报 |
+| 协议实现 | `input.c` 视觉段（**尚无解析**） | `input.c` 视觉段（**匿名协议精简帧**） | `screen.c`（TJC 协议） |
+| 状态 | 已落地，未接入控制环；帧格式仍留空 | 协议已落地，未接入控制环 | 协议已落地，未接入控制环 |
 
 ### 新机构接入系统要做三件事
 
