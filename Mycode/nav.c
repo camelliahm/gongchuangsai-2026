@@ -1,22 +1,10 @@
 #include "nav.h"
+#include "nav_map.h"
 #include "chassis_drive.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <math.h>
 
-/*---- 默认地图 ----------------------------------------*/
-
-/* ⚠ 示例路线，按赛题替换；末段必须是 NAV_SEG_END */
-static const NavSeg_t s_defaultMap[] = {
-	{ NAV_SEG_FORWARD,  600, 300 },		/* 前进 600 mm */
-	{ NAV_SEG_TURN,    -900,   0 },		/* 右转 90.0 度 */
-	{ NAV_SEG_STRAFE,  -400, 250 },		/* 左移 400 mm */
-	{ NAV_SEG_TURN,    1800,   0 },		/* 左转 180.0 度 */
-	{ NAV_SEG_FORWARD, -300, 200 },		/* 后退 300 mm */
-	{ NAV_SEG_END,        0,   0 },
-};
-
-#define NAV_DEFAULT_NUM		((uint16_t)(sizeof(s_defaultMap) / sizeof(s_defaultMap[0])))
 #define NAV_TURN_HOLD_CNT	(NAV_TURN_HOLD_MS / NAV_CTRL_PERIOD_MS)
 #define NAV_DEG2RAD			(0.01745329252f)
 
@@ -84,8 +72,7 @@ static void nav_SegStart(void)
 }
 
 /**
- * @brief  执行当前航段
- * @retval 1 = 本段完成
+ * @brief  执行当前航段，本段完成时返回 1
  * @note   转向段只判到位，转角速度由姿态环 PID 产生；平移段按"位移在段方向上的投影"判到位
  * @author camelliahm
  */
@@ -230,10 +217,9 @@ void nav_Init(void)
 }
 
 /**
- * @brief  装订地图
+ * @brief  装订地图，成功返回 true
  * @param  segs 航段表（只存指针，调用者须保证生命周期，通常用 static const）
  * @param  num  航段数，不得大于 NAV_SEG_MAX
- * @retval true = 已装订
  * @author camelliahm
  */
 bool nav_Load(const NavSeg_t *segs, uint16_t num)
@@ -286,6 +272,8 @@ void nav_Abort(void)
  */
 void nav_Step(void)
 {
+	uint16_t tmo;
+
 	/* 启动请求在本上下文消费：装载过程不会被状态机任务打断 */
 	if (s_nav.pendStart)
 	{
@@ -305,8 +293,14 @@ void nav_Step(void)
 		return;
 	}
 
-	/* 单段超时：收敛到 FAULT，不自行复位 */
-	if ((xTaskGetTickCount() - s_nav.segTick) > pdMS_TO_TICKS(NAV_SEG_TIMEOUT_MS))
+	/* 单段超时（按段取）：收敛到 FAULT，不自行复位 */
+	tmo = s_nav.map[s_nav.seg].timeout;
+	if (tmo == 0u)
+	{
+		tmo = NAV_SEG_TIMEOUT_MS;
+	}
+
+	if ((xTaskGetTickCount() - s_nav.segTick) > pdMS_TO_TICKS((uint32_t)tmo))
 	{
 		contract_PostEvent(EV_FAULT, 0);
 		nav_Abort();
