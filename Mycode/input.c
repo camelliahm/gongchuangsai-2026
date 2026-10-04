@@ -1,4 +1,5 @@
 #include "input.h"
+#include "screen.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -249,12 +250,14 @@ void input_Init(void)
 	visionSlot.errCnt      = 0u;
 	visionSlot.task.taskId = VISION_TASK_ID_NONE;
 	visionSlot.lastTick    = xTaskGetTickCount();
+
+	screen_Init();			// 串口屏软件槽位归零（USART2 硬件已在上面的循环里配好）
 }
 
 /**
  * @brief  周期处理：刷新三条通道的在线标志与丢弃计数
- * @note   解析尚未实现：字节只停在环形缓冲里，由 input_Read() 取用，无人取用时 lockCnt 会持续增长。
- *         待各通道帧格式定稿后，在此按通道加入解析（视觉模块 2 负责填 visionSlot）
+ * @note   本模块不做解析：字节只停在环形缓冲里、由 input_Read() 取用，无人取用时 lockCnt 会持续增长。
+ *         串口屏通道由 screen_Step() 消费；两路视觉的解析待帧格式定稿后再加
  * @author camelliahm
  */
 void input_Step(void)
@@ -273,7 +276,7 @@ void input_Step(void)
  * @param  dst 目标缓冲
  * @param  max 最多拷贝字节数
  * @retval 实际拷贝的字节数；0 = 无数据或参数非法
- * @note   与中断侧构成单生产者/单消费者；须与 input_Step() 在同一任务上下文调用
+ * @note   与中断侧构成单生产者/单消费者；须在任务上下文调用（串口屏通道由 screen_Step() 消费）
  * @author camelliahm
  */
 uint16_t input_Read(InputCh_t ch, uint8_t *dst, uint16_t max)

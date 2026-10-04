@@ -3,16 +3,17 @@
 
 #include "chassis.h"
 
-/* 输入汇聚层：三条串口通道 + 视觉模块 2 的帧槽位；分层与扩展指引见工程根目录 README.md */
+/* 输入汇聚层：三条串口的硬件配置与字节管道；串口屏协议实现见 screen.c；
+ * 分层与扩展指引见工程根目录 README.md */
 
 /* USART1：PA9(TX)/PA10(RX)，APB2，DMA2 Stream5 Ch4 —— 视觉模块 1（物块颜色）
  * USART3：PB10(TX)/PB11(RX)，APB1，DMA1 Stream3 Ch4 —— 视觉模块 2（障碍物 + 任务号）
- * USART2：PA2(TX)/PA3(RX)，APB1，DMA1 Stream5 Ch4 —— 串口屏（骨架，协议未定）
+ * USART2：PA2(TX)/PA3(RX)，APB1，DMA1 Stream5 Ch4 —— 串口屏（TJC 协议见 screen.h）
  * ⚠ 不用 USART6：它的 PC6/PC7 与舵机 PWM 是同一对引脚 */
 typedef enum {
 	INPUT_VISION1 = 0,	/* USART1 → 视觉模块 1 */
 	INPUT_VISION2,		/* USART3 → 视觉模块 2 */
-	INPUT_SCREEN,		/* USART2 → 串口屏（骨架） */
+	INPUT_SCREEN,		/* USART2 → 串口屏（TJC） */
 	INPUT_NUM
 } InputCh_t;
 
@@ -21,7 +22,8 @@ typedef enum {
 #define INPUT_RING_SIZE		(512u)		/* 每通道环形缓冲（2 的幂） */
 #define INPUT_TIMEOUT_MS	(500u)		/* 超过此时长未收到字节判离线 */
 
-/* 每通道接收状态。⚠ 三条通道的帧格式均未定，当前只统计到达字节，不做任何解析 */
+/* 每通道接收状态（字节级）。⚠ 本模块只搬字节不做帧解析：
+ * 串口屏的解析在 screen.c，两路视觉的帧格式仍留空 */
 typedef struct {
 	uint8_t	 online;			/* 1 = 最后收到字节未超时 */
 	uint32_t lastTick;			/* 最后收到字节的 tick */
@@ -29,7 +31,7 @@ typedef struct {
 	uint16_t lockCnt;			/* 环形缓冲满导致的丢弃字节数 */
 } InputSlot_t;
 
-/* 初始化三条串口（时钟/GPIO/DMA/NVIC）；返回后接收立即开始 */
+/* 初始化三条串口（时钟/GPIO/DMA/NVIC）并复位上层槽位；返回后接收立即开始 */
 void input_Init(void);
 
 /* 周期处理：刷新通道状态。暂未接入控制环 */
