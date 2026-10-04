@@ -3,6 +3,7 @@
         {
             "name": "V1.0",
             "includePath": [
+                "${workspaceFolder}/BASE",
                 "${workspaceFolder}/Mycode",
                 "${workspaceFolder}/APP",
                 "${workspaceFolder}/BSP",

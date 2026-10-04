@@ -3,6 +3,7 @@
 #include "chassis.h"
 #include "servo.h"
 #include "input.h"
+#include "vision.h"
 #include "oled.h"
 #include "nav.h"
 #include "FreeRTOS.h"
@@ -29,9 +30,7 @@ static const TaskDesc_t s_tasks[] = {
 
 #define TASK_NUM	(sizeof(s_tasks) / sizeof(s_tasks[0]))
 
-/*----------------------------------------------------------*/
-/*  FreeRTOS 钩子函数                                          */
-/*----------------------------------------------------------*/
+/*---- FreeRTOS 钩子函数 -------------------------------*/
 
 /**
  * @brief  栈溢出钩子
@@ -52,9 +51,7 @@ void vApplicationStackOverflowHook(struct tskTaskControlBlock *xTask, char *pcTa
 	}
 }
 
-/*----------------------------------------------------------*/
-/*  应用入口                                                    */
-/*----------------------------------------------------------*/
+/*---- 应用入口 ----------------------------------------*/
 
 /**
  * @brief  按任务表统一创建任务
@@ -86,7 +83,8 @@ static void ALL_Init(void)
 {
 	board_init();                          // 硬件初始化（NVIC、时钟、GPIO、CAN）
 	servo_Init();                          // 三路舵机 PWM（TIM3 CH1~CH3）
-	input_Init();                          // 两路串口（USART1 视觉 / USART2 二维码）
+	input_Init();                          // 视觉模块1 / 二维码（USART1 / USART2）
+	vision_Init();                         // 视觉模块2（USART3）：障碍物 + 任务信息
 	oled_Init();                           // OLED 状态屏（软件 I2C）
 	nav_Init();                            // 编排层：装载默认地图，不自动启动
 	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁

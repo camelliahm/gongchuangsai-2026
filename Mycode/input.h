@@ -3,15 +3,17 @@
 
 #include "chassis.h"
 
-/* 输入汇聚层：两路只收串口（USART1 = 视觉，USART2 = 二维码），详见 README.md */
+/* 输入汇聚层：两路只收串口（USART1 = 视觉模块 1，USART2 = 二维码），详见 README.md */
 
 /* USART1：PA9(TX)/PA10(RX)，挂 APB2，DMA2 Stream5 Ch4 */
 /* USART2：PA2(TX)/PA3(RX)，挂 APB1，DMA1 Stream5 Ch4 */
 /* ⚠ 不能用 USART6：它的 PC6/PC7 与舵机 PWM 是同一对引脚 */
+/* ⚠ USART3(PB10/PB11) 已划给"视觉模块 2"（Mycode/vision.c，二进制结构帧即障碍物+任务信息）； */
+/*   本层的"视觉"通道是**视觉模块 1**（文本行），两者是独立硬件，不要合并 */
 
 typedef enum {
-	INPUT_VISION = 0,	/* USART1 */
-	INPUT_QRCODE,		/* USART2 */
+	INPUT_VISION = 0,	/* USART1 → 视觉模块 1（文本行） */
+	INPUT_QRCODE,		/* USART2 → 二维码 */
 	INPUT_NUM
 } InputCh_t;
 
@@ -25,7 +27,8 @@ typedef struct {
 	uint8_t	 online;				/* 1 = 最后一条完整帧未超时 */
 	uint32_t lastTick;				/* 最后收到完整帧的 tick */
 	uint16_t rxCnt;					/* 累计完整帧数 */
-	uint16_t dropCnt;				/* 环形缓冲溢出丢弃的字节数 */
+	uint16_t resyncCnt;				/* 环形缓冲丢失字节引发的重同步次数 */
+	uint16_t overCnt;				/* 行超长导致的整行丢弃次数 */
 	char	 line[INPUT_LINE_MAX];	/* 最近一条完整帧（ASCII，'\0' 结尾） */
 	uint16_t lineLen;
 	uint8_t	 fresh;					/* 1 = 有新帧待上层取走 */

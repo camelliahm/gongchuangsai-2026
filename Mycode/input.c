@@ -2,7 +2,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/*---- 通道硬件资源：USART1 → 视觉，USART2 → 二维码 ----*/
+/*---- 通道硬件资源：USART1 → 视觉，USART2 → 二维码 -------------*/
 static USART_TypeDef *const       s_usart[INPUT_NUM]  = { USART1,       USART2       };
 static DMA_Stream_TypeDef *const  s_stream[INPUT_NUM] = { DMA2_Stream5, DMA1_Stream5 };
 static const uint32_t             s_chan[INPUT_NUM]   = { DMA_Channel_4, DMA_Channel_4 };
@@ -22,10 +22,12 @@ static volatile uint16_t s_drop[INPUT_NUM];
 /* 解析结果 */
 static InputSlot_t s_slot[INPUT_NUM];
 static uint16_t    s_lineLen[INPUT_NUM];
+static uint16_t    s_syncDrop[INPUT_NUM];	/* 解析侧已消费的丢字节计数 */
 
-/*----------------------------------------------------------*/
-/*  中断服务：IDLE 触发，把本帧从 DMA 缓冲搬进环形缓冲           */
-/*----------------------------------------------------------*/
+/* 行首哨兵：只有 '\n' 结尾的完整行才可能首字节等于它；丢字节后靠它重同步 */
+#define INPUT_SYNC_CHAR		((uint8_t)'\n')
+
+/*---- 中断服务：IDLE 触发，把本帧从 DMA 缓冲搬进环形缓冲 --------------*/
 
 /**
  * @brief  IDLE 空闲中断处理
@@ -52,7 +54,7 @@ static void input_OnIdle(InputCh_t ch)
 
 			if (next == s_tail[ch])
 			{
-				s_drop[ch]++;			/* 环满：丢新字节 */
+				s_drop[ch]++;			/* 环满：丢新字节，消费侧靠 s_drop 增量作废当前帧 */
 				continue;
 			}
 
@@ -96,9 +98,7 @@ void USART2_IRQHandler(void)
 	}
 }
 
-/*----------------------------------------------------------*/
-/*  周期处理：拆行 + 在线判断（任务上下文）                      */
-/*----------------------------------------------------------*/
+/*---- 周期处理：拆行 + 在线判断（任务上下文） -----------------------*/
 
 /**
  * @brief  从环形缓冲取一个字节
@@ -118,6 +118,30 @@ static bool input_RingPop(InputCh_t ch, uint8_t *b)
 }
 
 /**
+ * @brief  丢字节检测：把"静默丢弃"转成"整行作废 + 重同步"
+ * @param  b   取出的字节
+ * @retval true = 检查通过，字节可用
+ * @note   丢字节必然让流失去帧边界，行内已无可靠同步点，故整行作废，只认帧头哨兵重新起头
+ * @author camelliahm
+ */
+static bool input_CheckLoss(InputCh_t ch, uint8_t b)
+{
+	uint16_t drop = s_drop[ch];
+
+	if (drop == s_syncDrop[ch])
+	{
+		return true;
+	}
+
+	s_syncDrop[ch] = drop;						/* 本周期首次发现丢字节 */
+	s_lineLen[ch]  = 0u;						/* 丢掉被污染的半行 */
+	s_slot[ch].resyncCnt++;
+
+	/* 只有帧头哨兵才允许重新起头，否则一直丢弃直到下一个帧头 */
+	return (b == INPUT_SYNC_CHAR);
+}
+
+/**
  * @brief  把环形缓冲里的字节按行切分，填进槽位
  * @note   以 '\n' 为帧尾，'\r' 丢弃；超长行丢弃重来；槽位 line 始终存"最新一行"
  * @author camelliahm
@@ -128,6 +152,11 @@ static void input_ParseRing(InputCh_t ch)
 
 	while (input_RingPop(ch, &b))
 	{
+		if (!input_CheckLoss(ch, b))
+		{
+			continue;
+		}
+
 		if (b == (uint8_t)'\n')
 		{
 			s_slot[ch].line[s_lineLen[ch]] = '\0';
@@ -147,7 +176,7 @@ static void input_ParseRing(InputCh_t ch)
 			else
 			{
 				s_lineLen[ch] = 0u;		/* 溢出：整行作废，等下一个 '\n' */
-				s_slot[ch].dropCnt++;
+				s_slot[ch].overCnt++;
 			}
 		}
 	}
@@ -170,9 +199,7 @@ static void input_CheckOnline(InputCh_t ch)
 	}
 }
 
-/*----------------------------------------------------------*/
-/*  对外接口                                                    */
-/*----------------------------------------------------------*/
+/*---- 对外接口 ----------------------------------------*/
 
 /**
  * @brief  输入汇聚层初始化

@@ -8,6 +8,9 @@
 /APP/*
 !/APP/main.c
 
+# 底层基础（公共契约 / 状态机调度 / 显示 / 通用算法）
+!/BASE/
+
 # 自研应用层与 RTOS
 !/BSP/
 !/FreeRTOS/
