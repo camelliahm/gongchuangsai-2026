@@ -2,6 +2,7 @@
 #include "chassis_drive.h"
 #include "auxiliary.h"
 #include "nav.h"
+#include "input.h"
 #include "can.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -388,9 +389,11 @@ void contract_StateTask(void *pvParameters)
  */
 void contract_ControlStep(void)
 {
-	/* 1. 看门狗（可能投递 EV_FAULT） */
+	/* 1. 各模块周期处理。看门狗可能投递 EV_FAULT；输入汇聚层负责摁键自启动
+	 *    （按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志 */
 	chassis_DriveWatchdog();
 	aux_Step();
+	input_Step();
 
 	/* 2. 停车过程的停稳判断（可能投递 EV_ARRIVED） */
 	chassis_CheckBraking();

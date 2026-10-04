@@ -37,7 +37,7 @@
 | `Mycode/auxiliary.c/.h` | **辅助机构层**：底盘四轮之外的所有执行机构（现为升降轴） | 状态机迁移、底盘四轮 |
 | `Mycode/nav.c/.h` | **编排层（任务层）**：航段序列 → 逐周期的底盘速度与目标航向（引擎，不含地图数据） | 状态机迁移、直接下发 CAN |
 | `Mycode/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
-| `Mycode/input.c/.h` | **输入汇聚层**：三条串口的硬件配置与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ **视觉模块 2 的帧解析**（匿名协议精简帧）；视觉1 的解析仍留空 | 帧解析、执行机构、状态机迁移 |
+| `Mycode/input.c/.h` | **输入汇聚层**：三条串口的硬件配置与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ **视觉模块 2 的帧解析**（匿名协议精简帧）+ **摁键（自启动，板内自举的唯一入口）**；视觉1 的解析仍留空 | 帧解析、执行机构、状态机迁移 |
 | `Mycode/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
 | `Mycode/servo.c/.h` | **执行机构（PWM）**：3 路 50Hz 舵机（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8） | 状态机迁移、底盘四轮 |
 
@@ -55,14 +55,16 @@
 > **⚠ 尚未接入控制环的模块。**
 > `input` / `screen` / `servo` / `oled` 的硬件已在 `APP/main.c` 里初始化
 > （`screen` 无独立初始化入口，其软件槽位由 `input_Init()` 末尾调 `screen_Init()` 归零），但
-> **`input_Step()` / `screen_Step()` / `vision_Step()` / `oled_Step()` 都没有调用点，
-> 舵机也无人下达角度**。它们现在是"装好了但没接线的部件"——接入位置与前置条件见 **§6**。
+> **`screen_Step()` / `vision_Step()` / `oled_Step()` 都没有调用点，舵机也无人下达角度**。
+> 它们现在是"装好了但没接线的部件"——接入位置与前置条件见 **§6**。
 > ⚠ 也正因如此，`vision_Step()` 与整条视觉解析链当前被链接器当未引用段丢弃，
 > **`Program Size` 的 Code 增量不代表它的真实体积**。
 >
-> **编排层 `nav` 已接入控制环**：`nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门
-> **之前**执行，启动由 `contract_OnEnter(CHS_RUNNING)` 触发，姿态环给定经黑板 `chassis.yawTarget` 传递。
-> ⚠ 但**前置条件未满足**——里程计标定参数与姿态环 PID 全是占位值，当前是"通了但不准"，见 §6。
+> **已接入的只有两个**：编排层 `nav`（`nav_Step()` 在 RUNNING 闸门**之前**执行，启动由
+> `contract_OnEnter(CHS_RUNNING)` 触发，姿态环给定经黑板 `chassis.yawTarget` 传递），
+> 以及输入汇聚层的 `input_Step()`（`contract_ControlStep()` 编排序列第 1 步，负责摁键自启动）。
+> 两者都**前置条件未满足／能力未兑现**：nav 的里程计标定参数与姿态环 PID 全是占位值（"通了但不准"），
+> 而 `input_Step()` 里除摁键外的三条串口解析仍无人消费。均见 §6。
 >
 > **视觉模块 2 仍有两项内容未定稿**（见 §6）：避障帧（`0xF3`）的数据内容、视场角 / 安装姿态。
 > 未定稿项的标定进度记在 `MEMORY.md`。
@@ -347,6 +349,8 @@ Data[7]     保留填 0
 - **三个监视态（READY / RUNNING / BRAKING）都必须有 `EV_FAULT` 出口** —— 否则
   看门狗投出的故障会被当作"该状态不接受的事件"静默丢弃。
 - `EV_ARRIVED` / `EV_FAULT` 是**内部事件**，由停稳判断与看门狗投递，上位机指令不产生它们。
+- **`EV_ENABLE` / `EV_START` 有两个来源**：板内摁键（自启动，见 §6「摁键自启动」）与 CAN 后门
+  （`CMD_ENABLE` / `CMD_START`）。摁键只在 `IDLE` / `READY` 下受理，**不改变本表的迁移规则**。
 - 表里没有的组合 = "该状态不接受此事件"，被忽略并累加 `chassis.evtIgnored`（调试可观察）。
 
 ### 进入各状态的动作（`contract_OnEnter()`）
@@ -388,8 +392,9 @@ Data[7]     保留填 0
 | **改协议**<br>新指令码、新地址 | `contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
 | **改默认路线**<br>动作序列、航段表 | `nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文 |
 | **改场地几何**<br>区域位置、尺寸 | `nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav.c` 只做引擎 |
-| **加数据源**<br>第二个相机、新传感器串口 | `input.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉模块 2 见 `vision_Step()`） |
+| **加数据源**<br>第二个相机、新传感器串口 | `input.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉模块 2 见 `vision_Step()`）。⚠ 本文件另有「摁键」小节，新增通道时不要混进去 |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
+| **改摁键引脚 / 延时**<br>换脚、换成板载键、改倒计时 | `input.h` | `KEY_PORT` 与 `KEY_CLK` 必须同步改，再改 `KEY_PIN`；有效电平改 `KEY_ACTIVE_LOW`；时序与接线见下文「摁键自启动」 |
 | **接避障层**<br>反应式优先级抑制 | 新建 `avoid.c`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
 | **改状态屏内容** | `oled.c` | `oled_ShowStatus()` |
 | **换舵机 / 标定行程** | `servo.h` | `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US` |
@@ -420,11 +425,49 @@ Data[7]     保留填 0
 > 转向段显式给 `timeout = NAV_TURN_TIMEOUT_MS`：姿态环一阶时间常数约 5 s，**180° 约需 24 s**，
 > 超过默认的 20 s 单段超时。平移/停留段用默认 `NAV_SEG_TIMEOUT_MS`，保持较紧的卡死检测。
 
+### 摁键自启动（板内自举）
+
+**本工程没有上位机**（决策见 `MEMORY.md`），CAN 指令层（`CMD_ENABLE` / `CMD_START`）已降级为
+**调试后门 + 唯一外部急停**。把状态机推到 `RUNNING` 的正规入口就是这颗摁键 ——
+它是 `nav_Start()` 之前那道闸门在板内的唯一开关。
+
+| 项 | 取值 | 宏 |
+| --- | --- | --- |
+| 引脚 | `PA0`（当前工程未占用；`GPIOA` 时钟已由 `board.c` 开启） | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
+| 有效电平 | 低电平按下（内部上拉） | `KEY_ACTIVE_LOW` / `KEY_PUPD` |
+| 消抖 | 连续 4 次同电平（控制环 5 ms → 20 ms） | `KEY_DEBOUNCE_CNT` |
+| 延时 | 3000 ms | `KEY_START_DELAY_MS` |
+| 受理状态 | 仅 `CHS_IDLE` / `CHS_READY` | `input_KeyStep()` |
+
+**接线**：`PA0` 与 `GND` 之间接一个常开摁键，内部上拉已开、无需外部电阻。
+⚠ 换到板载摁键且它是"按下接 VDD"的 WK_UP 型时，把 `KEY_ACTIVE_LOW` 改成 `0`
+（`KEY_PUPD` 会跟着变成下拉）；换端口则 `KEY_PORT` 与 `KEY_CLK` 必须同步改。
+
+**时序与语义**
+
+1. 按下 → 消抖 20 ms 确认 → **开始计时**。这 3 s 内车仍在 `IDLE`，**电机失能、可自由推动**。
+2. 到点**重新判定一次状态**再投事件：`IDLE` → 投 `EV_ENABLE` + `EV_START`（一步到 `RUNNING`）；
+   `READY` → 只投 `EV_START`；其余状态（3 s 内被后门改动过）**放弃本次启动**。
+3. 进入 `RUNNING` 的动作里带 `nav_Start()`，于是车开始跑 `nav_map.h` 的默认路线 ——
+   **摁键的实质是"开始跑那条 18 段路线"**，不是"上电就走"。
+
+- **按下即锁存**，中途松手不取消；计时窗口内再按不生效。
+- **上电时以当前电平为基准**，所以"摁键被压住时上电"不产生按下边沿 —— 避免上电即跑车。
+- 摁键与 CAN 后门是两个平等的启动源，都只走到 `RUNNING` 这一步；`CMD_ESTOP` 的全局最高优先级
+  （`contract_Step()` 里"查表之前单独处理"）不因摁键而改变。
+
+> 为什么"3 s 后再判定状态"而不是"按下就投 `EV_ENABLE`"：`EV_ENABLE` 会让四轮**立即抱死**，
+> 摆位与对准就没法做了。这 3 s 是刻意留给操作者的摆放窗口。
+>
+> 摁键的扫描与倒计时都按"被调用次数/时刻"推进，因此 `input_Step()` **必须每周期被调用** ——
+> 它已挂在 `contract_ControlStep()` 编排序列的第 1 步。
+
 ### 已接入控制环的模块
 
 | 模块 | 接入形态 | 残留前置条件 |
 | --- | --- | --- |
 | `nav`（编排层） | `nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门**之前**调用；启动由 `contract_OnEnter(CHS_RUNNING)` 里的 `nav_Start()` 触发；姿态环给定经黑板 `chassis.yawTarget` 传递 | **里程计标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号）与**姿态环 PID 参数**——仍是占位值 |
+| `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
@@ -442,7 +485,7 @@ Data[7]     保留填 0
 
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
-| `input`（三条串口） | 在控制环里加 `input_Step()`（200 Hz 已高于任何相机帧率）；视觉模块 2 另加 `vision_Step()` | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 视觉1 的解析尚未实现、其字节无人取用，`lockCnt` 会持续增长（视觉2 由 `vision_Step()` 消费、串口屏由 `screen_Step()` 消费） |
+| `input`（三条串口） | `input_Step()` **已接入**（编排序列第 1 步）；仍缺 `vision_Step()`（视觉模块 2 的帧解析，200 Hz 已高于任何相机帧率） | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 视觉1 的解析尚未实现、其字节无人取用，`lockCnt` 会持续增长（视觉2 由 `vision_Step()` 消费、串口屏由 `screen_Step()` 消费） |
 | `screen`（串口屏协议） | 加 `screen_Step()`（须在**任务上下文**调用——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ 约束是**单向**的：漏接 `screen_Step()` 会让屏上报的字节堆在环形缓冲里；反过来漏接 `input_Step()` 只丢 USART2 通道的 `rxCnt / lockCnt` 诊断（`screen_Step()` 自带在线判断，可独立工作） |
 | `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
 | `servo` | 由上层直接调 `servo_SetAngle()` / `servo_SetPulse()` | 无。若要受安全闸门约束，需在 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 分支登记失能 |
@@ -507,9 +550,9 @@ Data[7]     保留填 0
 ### 两条红线
 
 1. **`contract_ControlStep()` 不许塞算法。** 它是骨架编排，只负责按顺序调用别人：
-   `chassis_DriveWatchdog()` → `aux_Step()` → `chassis_CheckBraking()` → `nav_Step()` →
+   `chassis_DriveWatchdog()` → `aux_Step()` → `input_Step()` → `chassis_CheckBraking()` → `nav_Step()` →
    `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
-   新模块的周期处理挂在 ①② 之间，不要改动这个顺序。
+   新模块的周期处理挂进 `input_Step()` 那一组（即前三个之间），不要改动这个顺序。
 2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
    状态机永远只认"系统级"的事，机构细节全留在 `auxiliary.c`。
 

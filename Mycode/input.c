@@ -162,12 +162,85 @@ static void input_RefreshState(InputCh_t ch)
 	}
 }
 
+/*---- 摁键（自启动） ------------------------------------------------*/
+
+/* 只在 IDLE / READY 下受理，其余状态（运行中、故障、急停）一律忽略：
+   保证摁键不会与状态机或 CAN 后门抢控制权 */
+static struct {
+	uint8_t  stable;		//消抖后的稳定电平：1 = 按下
+	uint8_t  cnt;			//与 stable 相反的电平已持续的扫描次数
+	uint8_t  wait;			//1 = 倒计时中，到点投启动事件
+	uint32_t pressTick;		//按下被确认的时刻
+} s_key;
+
+/**
+ * @brief  读摁键电平并折算成"是否按下"
+ * @note   返回 1 = 按下；有效电平由 KEY_ACTIVE_LOW 决定
+ * @author camelliahm
+ */
+static uint8_t input_KeyDown(void)
+{
+	uint8_t bit = (GPIO_ReadInputDataBit(KEY_PORT, KEY_PIN) == Bit_SET) ? 1u : 0u;
+
+	return (KEY_ACTIVE_LOW != 0u) ? (uint8_t)(1u - bit) : bit;
+}
+
+/**
+ * @brief  摁键扫描：消抖 → 按下即起倒计时 → 到点投 EV_ENABLE + EV_START
+ * @note   按下即锁存，中途松手不取消；上电以当前电平为基准，故"上电就被压住"不触发
+ * @author camelliahm
+ */
+static void input_KeyStep(void)
+{
+	uint8_t down = input_KeyDown();
+
+	if (down != s_key.stable)
+	{
+		s_key.cnt++;
+
+		if (s_key.cnt >= KEY_DEBOUNCE_CNT)
+		{
+			s_key.stable = down;
+			s_key.cnt    = 0u;
+
+			if ((down != 0u) &&
+				((chassis.state == CHS_IDLE) || (chassis.state == CHS_READY)))
+			{
+				s_key.wait      = 1u;
+				s_key.pressTick = xTaskGetTickCount();
+			}
+		}
+	}
+	else
+	{
+		s_key.cnt = 0u;
+	}
+
+	if ((s_key.wait != 0u) &&
+		((xTaskGetTickCount() - s_key.pressTick) >= pdMS_TO_TICKS(KEY_START_DELAY_MS)))
+	{
+		s_key.wait = 0u;
+
+		/* 延时内状态可能已被后门改动，到点重新判定一次；IDLE 要连使能一起投 */
+		if (chassis.state == CHS_IDLE)
+		{
+			contract_PostEvent(EV_ENABLE, 0);
+			contract_PostEvent(EV_START, 0);
+		}
+		else if (chassis.state == CHS_READY)
+		{
+			contract_PostEvent(EV_START, 0);
+		}
+	}
+}
+
 /*---- 对外接口 ----------------------------------------------------*/
 
 /**
  * @brief  输入汇聚层初始化
  * @note   三条串口分别占 PA9/PA10、PB10/PB11、PA2/PA3；接收走 DMA + IDLE，无接收中断风暴。
- *         本函数不做任何帧解析，返回后三条通道只把到达字节搬进环形缓冲
+ *         本函数不做任何帧解析，返回后三条通道只把到达字节搬进环形缓冲。
+ *         摁键只配成输入，不占中断，由控制环轮询消抖
  * @author camelliahm
  */
 void input_Init(void)
@@ -257,13 +330,30 @@ void input_Init(void)
 	s_visLen                = 0u;
 	s_visTotal              = 0u;
 
+	/* 摁键：只配成 GPIO 输入，无中断、无 DMA */
+	RCC_AHB1PeriphClockCmd(KEY_CLK, ENABLE);
+
+	g.GPIO_Pin   = KEY_PIN;
+	g.GPIO_Mode  = GPIO_Mode_IN;
+	g.GPIO_OType = GPIO_OType_PP;
+	g.GPIO_PuPd  = KEY_PUPD;
+	g.GPIO_Speed = GPIO_Speed_2MHz;
+	GPIO_Init(KEY_PORT, &g);
+
+	/* 以当前电平为基准：上电就被压住时不产生"按下"边沿 */
+	s_key.stable    = input_KeyDown();
+	s_key.cnt       = 0u;
+	s_key.wait      = 0u;
+	s_key.pressTick = 0u;
+
 	screen_Init();			// 串口屏软件槽位归零（USART2 硬件已在上面的循环里配好）
 }
 
 /**
- * @brief  周期处理：刷新三条通道的在线标志与丢弃计数
+ * @brief  周期处理：刷新三条通道的在线标志与丢弃计数，并扫描摁键
  * @note   本模块不做解析：字节只停在环形缓冲里、由各协议模块取用，无人取用时 lockCnt 会持续增长。
- *         串口屏通道由 screen_Step() 消费，视觉模块 2 通道由 vision_Step() 消费
+ *         串口屏通道由 screen_Step() 消费，视觉模块 2 通道由 vision_Step() 消费。
+ *         必须每周期调用 —— 摁键的消抖与自启动倒计时都按调用次数/时刻推进
  * @author camelliahm
  */
 void input_Step(void)
@@ -274,6 +364,8 @@ void input_Step(void)
 	{
 		input_RefreshState((InputCh_t)i);
 	}
+
+	input_KeyStep();
 }
 
 /**
