@@ -410,7 +410,7 @@ static void lift_Watchdog(void)
 		if (lift.online)
 		{
 			lift.online = 0;
-			chassis_PostEvent(EV_FAULT, 0x05u);
+			contract_PostEvent(EV_FAULT, 0x05u);
 		}
 	}
 	else
@@ -438,7 +438,7 @@ static void lift_CheckArrive(void)
 			can_TxLock();
 			Emm_V5_Origin_Interrupt(CHASSIS_ADDR_LIFT);
 			can_TxUnlock();
-			chassis_PostEvent(EV_FAULT, 0x05u);
+			contract_PostEvent(EV_FAULT, 0x05u);
 		}
 		return;
 	}
@@ -488,7 +488,7 @@ void aux_Step(void)
 }
 
 /**
- * @brief  初始化辅助机构（在 chassis_Init() 中调用）
+ * @brief  初始化辅助机构（在 contract_Init() 中调用）
  * @author camelliahm
  */
 void aux_Init(void)

@@ -1,7 +1,7 @@
 #ifndef __AUXILIARY_H
 #define __AUXILIARY_H
 
-#include "chassis.h"
+#include "contract.h"
 
 /* 辅助机构层（底盘四轮之外的执行机构）*/
 
@@ -63,7 +63,7 @@ typedef struct {
 
 extern __IO Lift_t lift;
 
-/* 初始化（在 chassis_Init() 中调用） */
+/* 初始化（在 contract_Init() 中调用） */
 void aux_Init(void);
 
 /* 以下接口内部统一用 can_TxLock/Unlock 包住发送；
@@ -94,7 +94,7 @@ void lift_ClearClog(void);
 /* 是否仍在移动中（供应用层查询） */
 bool lift_IsMoving(void);
 
-/* 指令分发与周期任务（由 chassis.c 调用） */
+/* 指令分发与周期任务（由 contract.c 调用） */
 bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f);	/* 是本模块指令则处理，返回 true */
 
 /* 解析升降轴反馈帧（地址 0x05） */

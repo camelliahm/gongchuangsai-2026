@@ -4,7 +4,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* 静态存储期变量由启动代码清零；初值在 chassis_Init() 中显式赋值 */
+/* 静态存储期变量由启动代码清零；初值在 contract_Init() 中显式赋值 */
 __IO ChassisDrive_t chassisDrive;
 __IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];
 
@@ -229,7 +229,7 @@ void chassis_DriveWatchdog(void)
 	/* 只在跳变沿投递；已掉线状态下无需重复投递 */
 	if (lost > 0)
 	{
-		chassis_PostEvent(EV_FAULT, lost);
+		contract_PostEvent(EV_FAULT, lost);
 	}
 }
 
@@ -278,7 +278,7 @@ void chassis_CheckBraking(void)
 	if (holdMs >= CHASSIS_STOP_HOLD_MS)
 	{
 		holdMs = 0;
-		chassis_PostEvent(EV_ARRIVED, 0);
+		contract_PostEvent(EV_ARRIVED, 0);
 	}
 }
 
@@ -436,7 +436,7 @@ void chassis_DriveStep(void)
 }
 
 /**
- * @brief  重置底盘驱动层状态（在 chassis_Init() 中调用）
+ * @brief  重置底盘驱动层状态（在 contract_Init() 中调用）
  * @note   里程计清零、PID 实例初始化、心跳置零
  * @author camelliahm
  */

@@ -1,4 +1,4 @@
-#include "chassis.h"
+#include "contract.h"
 #include "chassis_drive.h"
 #include "auxiliary.h"
 #include "can.h"
@@ -8,7 +8,7 @@
 
 /* 底盘应用层：状态机 + 系统级调度（不含控制算法），详见工程根目录 README.md */
 
-/* 静态存储期变量由启动代码清零；state / lastCmd 在 chassis_Init() 中显式赋值 */
+/* 静态存储期变量由启动代码清零；state / lastCmd 在 contract_Init() 中显式赋值 */
 __IO Chassis_t chassis;
 
 #define ARRAY_SIZE(a)	(sizeof(a) / sizeof((a)[0]))
@@ -54,7 +54,7 @@ static const ChassisTrans_t s_transTable[] = {
  * @note   新增机构时，在下面各 case 里补一行该机构的使能/失能调用即可
  * @author camelliahm
  */
-static void chassis_OnEnter(ChassisState_t s)
+static void contract_OnEnter(ChassisState_t s)
 {
 	chassis.state     = s;
 	chassis.stateTick = xTaskGetTickCount();
@@ -112,7 +112,7 @@ static void chassis_OnEnter(ChassisState_t s)
  * @param  param 事件参数（当前未使用）
  * @author camelliahm
  */
-static void chassis_Step(ChassisEvent_t ev, uint32_t param)
+static void contract_Step(ChassisEvent_t ev, uint32_t param)
 {
 	uint8_t i;
 
@@ -121,7 +121,7 @@ static void chassis_Step(ChassisEvent_t ev, uint32_t param)
 	/* 急停最高优先：任何状态都直接进入 ESTOP */
 	if ((ev == EV_ESTOP) && (chassis.state != CHS_ESTOP))
 	{
-		chassis_OnEnter(CHS_ESTOP);
+		contract_OnEnter(CHS_ESTOP);
 		return;
 	}
 
@@ -130,7 +130,7 @@ static void chassis_Step(ChassisEvent_t ev, uint32_t param)
 		if ((s_transTable[i].from == chassis.state) &&
 			(s_transTable[i].ev   == ev))
 		{
-			chassis_OnEnter(s_transTable[i].to);
+			contract_OnEnter(s_transTable[i].to);
 			return;
 		}
 	}
@@ -147,18 +147,18 @@ static void chassis_Step(ChassisEvent_t ev, uint32_t param)
  * @note   只投请求，能否迁移由状态机查表决定（闸门在 s_transTable）
  * @author camelliahm
  */
-static bool chassis_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
+static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
 	(void)f;
 
 	switch (cmd)
 	{
-	case CMD_ENABLE:      chassis_PostEvent(EV_ENABLE, 0);      return true;
-	case CMD_DISABLE:     chassis_PostEvent(EV_DISABLE, 0);     return true;
-	case CMD_START:       chassis_PostEvent(EV_START, 0);       return true;
-	case CMD_STOP:        chassis_PostEvent(EV_STOP, 0);        return true;
-	case CMD_ESTOP:       chassis_PostEvent(EV_ESTOP, 0);       return true;
-	case CMD_CLEAR_FAULT: chassis_PostEvent(EV_CLEAR_FAULT, 0); return true;
+	case CMD_ENABLE:      contract_PostEvent(EV_ENABLE, 0);      return true;
+	case CMD_DISABLE:     contract_PostEvent(EV_DISABLE, 0);     return true;
+	case CMD_START:       contract_PostEvent(EV_START, 0);       return true;
+	case CMD_STOP:        contract_PostEvent(EV_STOP, 0);        return true;
+	case CMD_ESTOP:       contract_PostEvent(EV_ESTOP, 0);       return true;
+	case CMD_CLEAR_FAULT: contract_PostEvent(EV_CLEAR_FAULT, 0); return true;
 	default:                                                    return false;
 	}
 }
@@ -169,7 +169,7 @@ static bool chassis_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
  * @note   解析前先校验 DLC；速度只在 RUNNING 下写入黑板，其余状态一律忽略
  * @author camelliahm
  */
-static bool chassis_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
+static bool contract_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
 	int16_t vx;
 	int16_t vy;
@@ -207,8 +207,8 @@ typedef struct {
 } ChassisRoute_t;
 
 static const ChassisRoute_t s_routeTable[] = {
-	{ CHASSIS_SEG_SYS,   CHASSIS_SEG_MASK, chassis_SysCmd   },	/* 0x00~0x0F 系统   */
-	{ CHASSIS_SEG_DRIVE, CHASSIS_SEG_MASK, chassis_DriveCmd },	/* 0x10~0x1F 底盘   */
+	{ CHASSIS_SEG_SYS,   CHASSIS_SEG_MASK, contract_SysCmd   },	/* 0x00~0x0F 系统   */
+	{ CHASSIS_SEG_DRIVE, CHASSIS_SEG_MASK, contract_DriveCmd },	/* 0x10~0x1F 底盘   */
 	{ CHASSIS_SEG_LIFT,  CHASSIS_SEG_MASK, aux_HandleCmd    },	/* 0x20~0x2F 升降轴 */
 };
 
@@ -218,7 +218,7 @@ static const ChassisRoute_t s_routeTable[] = {
  * @note   同一拍内处理完；无属主则忽略并计数，不当成错误
  * @author camelliahm
  */
-static void chassis_HandleCmd(const CAN_Frame_t *f)
+static void contract_HandleCmd(const CAN_Frame_t *f)
 {
 	ChassisCmd_t cmd = (ChassisCmd_t)f->Data[0];
 	uint8_t i;
@@ -247,7 +247,7 @@ static void chassis_HandleCmd(const CAN_Frame_t *f)
  * @note   依次初始化事件队列、底盘驱动层、辅助机构层
  * @author camelliahm
  */
-void chassis_Init(void)
+void contract_Init(void)
 {
 	s_evtQueue = xQueueCreate(CHASSIS_EVT_QUEUE_LEN, sizeof(ChassisEvtMsg_t));
 	configASSERT(s_evtQueue != NULL);
@@ -266,13 +266,13 @@ void chassis_Init(void)
  *         其余地址（含 0x00 广播）忽略
  * @author camelliahm
  */
-void chassis_HandleFrame(const CAN_Frame_t *f)
+void contract_HandleFrame(const CAN_Frame_t *f)
 {
 	uint8_t addr = (uint8_t)((f->ExtId >> 8) & 0xFFu);
 
 	if (addr == CHASSIS_ADDR_HOST)
 	{
-		chassis_HandleCmd(f);
+		contract_HandleCmd(f);
 	}
 	else if (addr == CHASSIS_ADDR_LIFT)
 	{
@@ -293,7 +293,7 @@ void chassis_HandleFrame(const CAN_Frame_t *f)
  * @note   投递方可能是控制环，绝不能在这里挂住，故超时为 0
  * @author camelliahm
  */
-void chassis_PostEvent(ChassisEvent_t ev, uint32_t param)
+void contract_PostEvent(ChassisEvent_t ev, uint32_t param)
 {
 	ChassisEvtMsg_t msg;
 
@@ -318,7 +318,7 @@ void chassis_PostEvent(ChassisEvent_t ev, uint32_t param)
  *         本任务只负责"节拍"与状态相关的调度，算法在各模块内。
  * @author camelliahm
  */
-void chassis_CtrlTask(void *pvParameters)
+void contract_CtrlTask(void *pvParameters)
 {
 	TickType_t xLastWakeTime = xTaskGetTickCount();
 
@@ -326,7 +326,7 @@ void chassis_CtrlTask(void *pvParameters)
 
 	for (;;)
 	{
-		chassis_ControlStep();
+		contract_ControlStep();
 
 		/* 保证固定周期，不随其他任务波动 */
 		vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CHASSIS_CTRL_PERIOD_MS));
@@ -337,10 +337,10 @@ void chassis_CtrlTask(void *pvParameters)
  * @brief  CAN 接收任务
  * @param  pvParameters 未使用
  * @note   阻塞等待接收队列（CAN1_RX0 中断投递），
- *         取到帧后交由 chassis_HandleFrame() 按地址分流
+ *         取到帧后交由 contract_HandleFrame() 按地址分流
  * @author camelliahm
  */
-void chassis_CanRecvTask(void *pvParameters)
+void contract_CanRecvTask(void *pvParameters)
 {
 	CAN_Frame_t frame;
 
@@ -351,7 +351,7 @@ void chassis_CanRecvTask(void *pvParameters)
 		/* 超时 100ms 只为周期性回头；正常情况下中断一到就唤醒 */
 		if (can_RecvFrame(&frame, 100))
 		{
-			chassis_HandleFrame(&frame);
+			contract_HandleFrame(&frame);
 		}
 	}
 }
@@ -362,7 +362,7 @@ void chassis_CanRecvTask(void *pvParameters)
  * @note   阻塞在事件队列上，无事件时不占 CPU
  * @author camelliahm
  */
-void chassis_StateTask(void *pvParameters)
+void contract_StateTask(void *pvParameters)
 {
 	ChassisEvtMsg_t msg;
 
@@ -372,7 +372,7 @@ void chassis_StateTask(void *pvParameters)
 	{
 		if (xQueueReceive(s_evtQueue, &msg, portMAX_DELAY) == pdPASS)
 		{
-			chassis_Step(msg.ev, msg.param);
+			contract_Step(msg.ev, msg.param);
 		}
 	}
 }
@@ -383,7 +383,7 @@ void chassis_StateTask(void *pvParameters)
  *         各模块内部只做"自己的事"，互不干涉。
  * @author camelliahm
  */
-void chassis_ControlStep(void)
+void contract_ControlStep(void)
 {
 	/* 1. 看门狗（可能投递 EV_FAULT） */
 	chassis_DriveWatchdog();
@@ -407,7 +407,7 @@ void chassis_ControlStep(void)
  * @retval 状态名字符串；越界时返回 "UNKNOWN"
  * @author camelliahm
  */
-const char *chassis_StateName(ChassisState_t s)
+const char *contract_StateName(ChassisState_t s)
 {
 	static const char *name[CHS_STATE_NUM] = {
 		"IDLE", "READY", "RUNNING", "BRAKING", "FAULT", "ESTOP"

@@ -1,7 +1,7 @@
 #ifndef __CHASSIS_DRIVE_H
 #define __CHASSIS_DRIVE_H
 
-#include "chassis.h"
+#include "contract.h"
 
 /* 底盘驱动层（四轮麦轮）：驱动器动作 / 反馈看门狗 / 停稳判断 / 底盘运动学，详见 README.md */
 
@@ -47,7 +47,7 @@ extern __IO ChassisDrive_t chassisDrive;
 extern __IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];
 
 /*---- 初始化 ----*/
-/* 里程计清零、姿态环 PID 初始化、电机槽位复位；在 chassis_Init() 中调用 */
+/* 里程计清零、姿态环 PID 初始化、电机槽位复位；在 contract_Init() 中调用 */
 void chassis_DriveInit(void);
 
 /*---- 四台电机的动作与上报 ----*/

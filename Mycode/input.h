@@ -1,7 +1,7 @@
 #ifndef __INPUT_H
 #define __INPUT_H
 
-#include "chassis.h"
+#include "contract.h"
 
 /* 输入汇聚层：三条串口的硬件配置与字节管道，以及视觉模块 2 的帧解析；
  * 串口屏协议实现见 screen.c；分层与扩展指引见工程根目录 README.md */

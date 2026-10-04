@@ -1,7 +1,7 @@
 #ifndef __NAV_H
 #define __NAV_H
 
-#include "chassis.h"
+#include "contract.h"
 
 /* 编排层（任务层）：把航段序列翻译成逐周期的底盘速度与目标航向，详见 README.md */
 /* ⚠ 尚未接入控制环：nav_Step() 目前无调用点，接入方法与前置条件见 README.md */
@@ -47,7 +47,7 @@ bool nav_Load(const NavSeg_t *segs, uint16_t num);
 void nav_Start(void);
 void nav_Abort(void);
 
-/* 控制环周期调用（5ms）。暂未接入 chassis_ControlStep() */
+/* 控制环周期调用（5ms）。暂未接入 contract_ControlStep() */
 void nav_Step(void);
 
 NavState_t nav_GetState(void);

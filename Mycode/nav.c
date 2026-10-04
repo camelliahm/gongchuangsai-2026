@@ -276,7 +276,7 @@ void nav_Abort(void)
 
 /**
  * @brief  编排层周期推进
- * @note   暂未接入 chassis_ControlStep()；接入点应放在 RUNNING 闸门之后、chassis_DriveStep() 之前，
+ * @note   暂未接入 contract_ControlStep()；接入点应放在 RUNNING 闸门之后、chassis_DriveStep() 之前，
  *         这样急停与故障的保护可原样继承，本函数只写 chassis.vx/vy，不直接驱动车轮
  * @author camelliahm
  */
@@ -299,7 +299,7 @@ void nav_Step(void)
 	/* 单段超时：收敛到 FAULT，不自行复位 */
 	if ((xTaskGetTickCount() - s_nav.segTick) > pdMS_TO_TICKS(NAV_SEG_TIMEOUT_MS))
 	{
-		chassis_PostEvent(EV_FAULT, 0);
+		contract_PostEvent(EV_FAULT, 0);
 		nav_Abort();
 		return;
 	}
@@ -316,7 +316,7 @@ void nav_Step(void)
 		chassis.vx = 0;
 		chassis.vy = 0;
 		chassis.w  = 0;
-		chassis_PostEvent(EV_STOP, 0);		/* 复用现成的减速停链路收尾 */
+		contract_PostEvent(EV_STOP, 0);		/* 复用现成的减速停链路收尾 */
 		s_nav.state = NAV_DONE;
 		return;
 	}

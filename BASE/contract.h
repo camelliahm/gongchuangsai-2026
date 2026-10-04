@@ -1,5 +1,5 @@
-#ifndef __CHASSIS_H
-#define __CHASSIS_H
+#ifndef __CONTRACT_H
+#define __CONTRACT_H
 
 #include "board.h"
 #include "can.h"
@@ -23,7 +23,7 @@
 #define CHASSIS_SEG_VISION		(0x50u)
 #define CHASSIS_SEG_MASK		(0xF0u)		/* 段掩码：段基址 = 码 & MASK */
 
-/*---- 消息码：Data[0] = 消息码，Data[1..] = 参数；各段属主见 chassis.c 的 s_routeTable[] ----*/
+/*---- 消息码：Data[0] = 消息码，Data[1..] = 参数；各段属主见 contract.c 的 s_routeTable[] ----*/
 typedef enum {
 	CMD_NONE		= 0x00,
 	CMD_ENABLE		= 0x01,		/* 参数无：IDLE  → READY   */
@@ -51,7 +51,7 @@ typedef enum {
 	CMD_LIFT_CLEARF	= 0x24,		/* 参数无：解除升降轴堵转保护 */
 } ChassisCmd_t;
 
-/*---- 消息处理器（按段注册到 chassis.c 的 s_routeTable[]）----*/
+/*---- 消息处理器（按段注册到 contract.c 的 s_routeTable[]）----*/
 /* 返回 true = 已受理；false = 未受理（段内无属主，计入 evtIgnored） */
 typedef bool (*ChassisHandler_t)(ChassisCmd_t cmd, const CAN_Frame_t *f);
 
@@ -105,18 +105,18 @@ typedef struct {
 
 extern __IO Chassis_t chassis;
 
-void chassis_Init(void);			/* 创建事件队列；须在创建任务之前调用 */
+void contract_Init(void);			/* 创建事件队列；须在创建任务之前调用 */
 
-void chassis_HandleFrame(const CAN_Frame_t *f);	/* 按地址分流：0xFE 消息 / 0x01~0x04 四轮反馈 / 0x05 升降反馈 */
+void contract_HandleFrame(const CAN_Frame_t *f);	/* 按地址分流：0xFE 消息 / 0x01~0x04 四轮反馈 / 0x05 升降反馈 */
 
-void chassis_PostEvent(ChassisEvent_t ev, uint32_t param);	/* 投递状态机事件（非阻塞，队列满丢弃） */
+void contract_PostEvent(ChassisEvent_t ev, uint32_t param);	/* 投递状态机事件（非阻塞，队列满丢弃） */
 
-void chassis_CtrlTask(void *pvParameters);		/* 控制环任务体：固定 5ms 节拍 */
-void chassis_CanRecvTask(void *pvParameters);	/* CAN 接收任务体：阻塞等队列并分流 */
-void chassis_StateTask(void *pvParameters);		/* 状态机任务体：阻塞等事件，空闲零 CPU */
+void contract_CtrlTask(void *pvParameters);		/* 控制环任务体：固定 5ms 节拍 */
+void contract_CanRecvTask(void *pvParameters);	/* CAN 接收任务体：阻塞等队列并分流 */
+void contract_StateTask(void *pvParameters);		/* 状态机任务体：阻塞等事件，空闲零 CPU */
 
-void chassis_ControlStep(void);					/* 控制环周期内调用：只做编排，不写控制算法 */
+void contract_ControlStep(void);					/* 控制环周期内调用：只做编排，不写控制算法 */
 
-const char *chassis_StateName(ChassisState_t s);	/* 状态名（调试用） */
+const char *contract_StateName(ChassisState_t s);	/* 状态名（调试用） */
 
 #endif

@@ -29,8 +29,8 @@
 
 | 文件 | 职责 | 不该放什么 |
 | --- | --- | --- |
-| `BASE/chassis.h` | **公共契约层**：消息码分段、地址宏、状态/事件枚举、`Chassis_t`、任务参数、`chassis_*` 接口 | 各层私有类型与宏 |
-| `BASE/chassis.c` | **状态机 + 系统级调度**：迁移表、`chassis_OnEnter`、消息路由派发、三个任务体、控制环编排 | 任何控制算法 |
+| `BASE/contract.h` | **公共契约层**：消息码分段、地址宏、状态/事件枚举、`Chassis_t`、任务参数、`contract_*` 接口 | 各层私有类型与宏 |
+| `BASE/contract.c` | **状态机 + 系统级调度**：迁移表、`contract_OnEnter`、消息路由派发、三个任务体、控制环编排 | 任何控制算法 |
 | `BASE/oled.c/.h`<br>`BASE/oled_font.h` | **显示层**：SSD1306 128x64 状态屏（软件 I2C，只读黑板，不参与控制） | 状态机迁移、任何控制逻辑 |
 | `BASE/PID_Mod.c/.h` | **通用算法层**：PID 控制器（外部移植，只引用不修改） | 状态机迁移、硬件访问 |
 | `Mycode/chassis_drive.c/.h` | **底盘驱动层**：四轮动作 / 反馈 / 看门狗 / 停稳判断 + 里程计 / 麦轮逆解 / 姿态环 | 状态机迁移、升降轴 |
@@ -46,7 +46,7 @@
 
 三层之间**不直接互相调用**，通过两条通道交互：
 
-- **向上报事件**：`chassis_PostEvent(EV_FAULT, ...)` 投给状态机
+- **向上报事件**：`contract_PostEvent(EV_FAULT, ...)` 投给状态机
 - **向下读状态**：只读 `chassis.state`
 
 > 这是最小形态。扩展到"所有模块统一按消息接入"的完整约定，见 **§2 模块间通信**。
@@ -77,9 +77,9 @@
 
 | 要素 | 内容 | 现状 |
 | --- | --- | --- |
-| **契约** | 地址宏、消息码枚举、消息结构体 —— 集中在 `BASE/chassis.h` | 已有 |
+| **契约** | 地址宏、消息码枚举、消息结构体 —— 集中在 `BASE/contract.h` | 已有 |
 | **节点** | 每个机构 = 一个 `xxx_HandleCmd()` + 一个 `xxx_Step()`，**不新开任务** | 已有（`auxiliary.c` 就是这个形状） |
-| **路由** | 一张 `{ 消息码段 → handler }` 注册表 | **已有**（`chassis.c` 的 `s_routeTable[]`，`chassis_HandleCmd()` 按段查表派发） |
+| **路由** | 一张 `{ 消息码段 → handler }` 注册表 | **已有**（`contract.c` 的 `s_routeTable[]`，`contract_HandleCmd()` 按段查表派发） |
 | **黑板** | 全局 `chassis` 结构体：编排层写目标，模块写状态 | 已有 |
 | **编排** | 任务层 `nav`：决定机构的组合与先后顺序 | **已建**（未接入控制环） |
 
@@ -122,7 +122,7 @@
 
 1. **总线只传请求，不绕过安全闸门。** handler 可以拒绝请求；"允不允许动"始终由状态机决定
    （`CMD_SET_VEL` 被 `RUNNING` 闸住就是范例）。
-2. **不新增任务。** 一个控制任务按序 tick 各机构 —— `chassis_ControlStep()` 已经是这个形状。
+2. **不新增任务。** 一个控制任务按序 tick 各机构 —— `contract_ControlStep()` 已经是这个形状。
    16 KB 堆撑不住 N 个机构各一个任务。
 3. **同步派发必须同一拍内处理完**，不许留待下一拍。
 4. **持续状态走黑板，不走消息。** 位姿、位置、电机状态这类"随时可读"的量放结构体；
@@ -133,10 +133,10 @@
 
 ### 2.5 新增模块的四个动作
 
-1. **申请消息码** —— 在对应段里加一个枚举（`chassis.h`）
+1. **申请消息码** —— 在对应段里加一个枚举（`contract.h`）
 2. **实现 handler + step** —— `xxx_HandleCmd()` / `xxx_Step()`，放 `auxiliary.c`（或新建模块文件）
-3. **注册到路由表** —— 在 `chassis.c` 的 `s_routeTable[]` 加一行（段基址 + 段掩码 + 该模块的 handler）；不属于任何已注册段的消息会被忽略并累加 `chassis.evtIgnored`
-4. **在 `chassis_OnEnter()` 登记状态动作** —— IDLE 失能、FAULT/ESTOP 安全停
+3. **注册到路由表** —— 在 `contract.c` 的 `s_routeTable[]` 加一行（段基址 + 段掩码 + 该模块的 handler）；不属于任何已注册段的消息会被忽略并累加 `chassis.evtIgnored`
+4. **在 `contract_OnEnter()` 登记状态动作** —— IDLE 失能、FAULT/ESTOP 安全停
    （**与接口无关，这一步一直都要做**）
 
 ### 2.6 收益与代价（如实）
@@ -198,7 +198,7 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | 4 | `oled_Init()` | OLED 状态屏（软件 I2C）— ⚠ 未接入控制环 |
 | 5 | `nav_Init()` | 编排层：装载默认地图，不自动启动 — ⚠ 未接入控制环 |
 | 6 | `can_RtosInit()` | 建 CAN 接收队列 + 发送互斥锁 |
-| 7 | `chassis_Init()` | 建事件队列 → `chassis_DriveInit()` + `aux_Init()` |
+| 7 | `contract_Init()` | 建事件队列 → `chassis_DriveInit()` + `aux_Init()` |
 | 8 | `App_TaskCreate()` | 按任务表 `s_tasks[]` 建任务 |
 
 第 1 项须最先执行 —— 后序模块的时钟与 GPIO 由它打开；第 6~8 项须在建任务之前
@@ -206,9 +206,9 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 
 | 任务 | 优先级 | 栈（字） | 入口 | 职责 |
 | --- | --- | --- | --- | --- |
-| `CTRL` | 4 | 512 | `chassis_CtrlTask` | 5 ms 绝对节拍，每拍调 `chassis_ControlStep()` |
-| `CAN_RX` | 3 | 256 | `chassis_CanRecvTask` | 阻塞 `can_RecvFrame()` 取帧 → `chassis_HandleFrame()` 分流 |
-| `STATE` | 2 | 256 | `chassis_StateTask` | 阻塞等事件 → `chassis_Step()` 查表迁移 |
+| `CTRL` | 4 | 512 | `contract_CtrlTask` | 5 ms 绝对节拍，每拍调 `contract_ControlStep()` |
+| `CAN_RX` | 3 | 256 | `contract_CanRecvTask` | 阻塞 `can_RecvFrame()` 取帧 → `contract_HandleFrame()` 分流 |
+| `STATE` | 2 | 256 | `contract_StateTask` | 阻塞等事件 → `contract_Step()` 查表迁移 |
 
 急停为什么快：`CAN_RX` 优先级高于 `STATE`，帧一到就抢占运行，投完事件 `STATE`
 立即就绪；`CTRL` 每 5 ms 只占极短时间。最坏等待 = 一次控制脉冲（几十 µs 量级）。
@@ -227,13 +227,13 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | --- | --- | --- |
 | `0x01` ~ `0x04` | 四台 Emm_V5 驱动器（麦轮） | `chassis_HandleFeedback()`，更新电机槽位 |
 | `0x05` | 升降轴驱动器（丝杆） | `aux_HandleLiftFeedback()` |
-| `0xFE` | 本机（上位机发给底盘的指令帧） | `chassis_HandleCmd()` |
+| `0xFE` | 本机（上位机发给底盘的指令帧） | `contract_HandleCmd()` |
 | `0x00` | ZDT **广播地址** | **禁止占用**，收到一律忽略 |
 | 其它 | 无关帧 | 忽略 |
 
 > **本表只描述"挂在 CAN1 上"的设备。** 目前只有步进类（四轮 + 升降丝杆）走 CAN。
 > 后续若新增非 CAN 机构（PWM / GPIO / 串口），不占这里的地址，也不进
-> `chassis_HandleFrame()` 的分流。
+> `contract_HandleFrame()` 的分流。
 
 **升降轴为什么挂在同一条总线上**：四轮下发 800 帧/s + 反馈 200 帧/s，加升降轴约
 225 帧/s，合计约 1225 帧/s ≈ 32%，远低于物理上限，无需第二路 CAN 分流。上 CAN2 要改
@@ -317,7 +317,7 @@ Data[7]     保留填 0
 ## 5. 状态机
 
 六个状态：`IDLE` / `READY` / `RUNNING` / `BRAKING` / `FAULT` / `ESTOP`。
-纯数据驱动，迁移规则在 `chassis.c` 的 `s_transTable[]`。
+纯数据驱动，迁移规则在 `contract.c` 的 `s_transTable[]`。
 
 | 当前状态 | 事件 | 目标状态 |
 | --- | --- | --- |
@@ -337,14 +337,14 @@ Data[7]     保留填 0
 
 规则：
 
-- **`EV_ESTOP` 不在表里**。它在 `chassis_Step()` 查表之前单独拦截，任何非 ESTOP
+- **`EV_ESTOP` 不在表里**。它在 `contract_Step()` 查表之前单独拦截，任何非 ESTOP
   状态一律直接进 ESTOP。
 - **三个监视态（READY / RUNNING / BRAKING）都必须有 `EV_FAULT` 出口** —— 否则
   看门狗投出的故障会被当作"该状态不接受的事件"静默丢弃。
 - `EV_ARRIVED` / `EV_FAULT` 是**内部事件**，由停稳判断与看门狗投递，上位机指令不产生它们。
 - 表里没有的组合 = "该状态不接受此事件"，被忽略并累加 `chassis.evtIgnored`（调试可观察）。
 
-### 进入各状态的动作（`chassis_OnEnter()`）
+### 进入各状态的动作（`contract_OnEnter()`）
 
 | 状态 | 四轮 | 升降轴 |
 | --- | --- | --- |
@@ -372,10 +372,10 @@ Data[7]     保留填 0
 
 | 要做什么 | 改哪个文件 | 具体位置 |
 | --- | --- | --- |
-| **加新的执行机构**<br>接口不限 CAN：PWM / GPIO / 串口都行 | `auxiliary.c` / `auxiliary.h` | ① `aux_Init()` 初始化<br>② `aux_Step()` 加周期处理<br>③ 在 `chassis_OnEnter()` 补该机构的使能 / 失能调用<br>④ 仅当受上位机 **CAN** 指令控制时，才在 `aux_HandleCmd()` 加 `case` |
+| **加新的执行机构**<br>接口不限 CAN：PWM / GPIO / 串口都行 | `auxiliary.c` / `auxiliary.h` | ① `aux_Init()` 初始化<br>② `aux_Step()` 加周期处理<br>③ 在 `contract_OnEnter()` 补该机构的使能 / 失能调用<br>④ 仅当受上位机 **CAN** 指令控制时，才在 `aux_HandleCmd()` 加 `case` |
 | **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `chassis_drive.c` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
-| **改状态迁移**<br>加新状态、改转移条件 | `chassis.c` | 只动 `s_transTable[]` 和 `chassis_OnEnter()` 的分支 |
-| **改协议**<br>新指令码、新地址 | `chassis.h` + `BSP/Emm_V5.c` | 功能码枚举在 `chassis.h`，协议字节组装在 `Emm_V5.c` |
+| **改状态迁移**<br>加新状态、改转移条件 | `contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
+| **改协议**<br>新指令码、新地址 | `contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
 | **改任务编排**<br>地图、动作序列 | `nav.c` | `s_defaultMap[]` 换成赛题路线；接入点见 §6 |
 | **加数据源**<br>第二个相机、新传感器串口 | `input.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉模块 2 见 `vision_Step()`） |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
@@ -389,11 +389,11 @@ Data[7]     保留填 0
 
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
-| `nav` | 在 `chassis_ControlStep()` 的 `if (state != CHS_RUNNING) return;` **之后**、`chassis_DriveStep()` **之前**加 `nav_Step()` | **里程计必须先标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号仍是占位值）；另需把 `chassis_DriveStep()` 姿态环的给定 `0.0f` 换成 `nav_GetTargetYaw()`，转向才会生效 |
+| `nav` | 在 `contract_ControlStep()` 的 `if (state != CHS_RUNNING) return;` **之后**、`chassis_DriveStep()` **之前**加 `nav_Step()` | **里程计必须先标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号仍是占位值）；另需把 `chassis_DriveStep()` 姿态环的给定 `0.0f` 换成 `nav_GetTargetYaw()`，转向才会生效 |
 | `input`（三条串口） | 在控制环里加 `input_Step()`（200 Hz 已高于任何相机帧率）；视觉模块 2 另加 `vision_Step()` | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 视觉1 的解析尚未实现、其字节无人取用，`lockCnt` 会持续增长（视觉2 由 `vision_Step()` 消费、串口屏由 `screen_Step()` 消费） |
 | `screen`（串口屏协议） | 加 `screen_Step()`（须在**任务上下文**调用——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ 约束是**单向**的：漏接 `screen_Step()` 会让屏上报的字节堆在环形缓冲里；反过来漏接 `input_Step()` 只丢 USART2 通道的 `rxCnt / lockCnt` 诊断（`screen_Step()` 自带在线判断，可独立工作） |
 | `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
-| `servo` | 由上层直接调 `servo_SetAngle()` / `servo_SetPulse()` | 无。若要受安全闸门约束，需在 `chassis_OnEnter()` 的 IDLE / FAULT / ESTOP 分支登记失能 |
+| `servo` | 由上层直接调 `servo_SetAngle()` / `servo_SetPulse()` | 无。若要受安全闸门约束，需在 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 分支登记失能 |
 
 > `nav_Step()` 放在 RUNNING 闸门**之后**是关键：非 RUNNING 时它根本不会被执行，
 > 于是急停、故障、停车的保护全部免费继承，任务层不需要任何额外的安全判断。
@@ -447,17 +447,17 @@ Data[7]     保留填 0
 
 **只有第 ③ 项和 CAN 有关** —— 走 PWM 的机构直接跳过第 ③ 步即可。
 
-1. **动作登记** → `chassis_OnEnter()` 里补 IDLE 失能 / FAULT-ESTOP 安全停（**与接口无关**）
+1. **动作登记** → `contract_OnEnter()` 里补 IDLE 失能 / FAULT-ESTOP 安全停（**与接口无关**）
 2. **周期处理** → 挂进 `aux_Step()`（**与接口无关**）
 3. **指令分发** → `aux_HandleCmd()` 加 `case`（**仅当它受上位机 CAN 指令控制时**）
 
 ### 两条红线
 
-1. **`chassis_ControlStep()` 不许塞算法。** 它是骨架编排，只负责按顺序调用别人：
+1. **`contract_ControlStep()` 不许塞算法。** 它是骨架编排，只负责按顺序调用别人：
    `chassis_DriveWatchdog()` → `aux_Step()` → `chassis_CheckBraking()` →
    `if (state != RUNNING) return;` → `chassis_DriveStep()`。
    新模块的周期处理挂在 ①② 之间，不要改动这个顺序。
-2. **加新机构时别碰 `chassis.c` 的状态机逻辑。** 只需在 `chassis_OnEnter()` 里加一行调用。
+2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
    状态机永远只认"系统级"的事，机构细节全留在 `auxiliary.c`。
 
 ---

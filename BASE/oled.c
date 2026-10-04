@@ -1,6 +1,6 @@
 #include "oled.h"
 #include "oled_font.h"
-#include "chassis.h"
+#include "contract.h"
 #include "chassis_drive.h"
 #include "auxiliary.h"
 #include "FreeRTOS.h"
@@ -259,7 +259,7 @@ void oled_ShowStatus(void)
 	oled_Clear();
 
 	/* 行1：状态名 + 四轮在线数 */
-	oled_ShowString(1u, 1u, chassis_StateName(chassis.state));
+	oled_ShowString(1u, 1u, contract_StateName(chassis.state));
 	buf[0] = (char)('0' + online);
 	buf[1] = '/';
 	buf[2] = (char)('0' + CHASSIS_MOTOR_NUM);

@@ -1,6 +1,6 @@
 #include "board.h"
 #include "can.h"
-#include "chassis.h"
+#include "contract.h"
 #include "servo.h"
 #include "input.h"
 #include "oled.h"
@@ -10,7 +10,7 @@
 
 /**********************************************************
 ***	任务表
-***	任务体一律实现在各自模块（如 APP/chassis.c），本文件只负责
+***	任务体一律实现在各自模块（如 APP/contract.c），本文件只负责
 ***	"声明式"地罗列任务并统一创建，不承载任何业务逻辑。
 ***	任务划分与控制环周期取值的依据见工程根目录 README.md。
 **********************************************************/
@@ -22,9 +22,9 @@ typedef struct {
 } TaskDesc_t;
 
 static const TaskDesc_t s_tasks[] = {
-	{ chassis_CtrlTask,    "CTRL",   CHASSIS_CTRL_TASK_STACK,  CHASSIS_CTRL_TASK_PRIO  },
-	{ chassis_CanRecvTask, "CAN_RX", CHASSIS_CAN_TASK_STACK,   CHASSIS_CAN_TASK_PRIO   },
-	{ chassis_StateTask,   "STATE",  CHASSIS_STATE_TASK_STACK, CHASSIS_STATE_TASK_PRIO },
+	{ contract_CtrlTask,    "CTRL",   CHASSIS_CTRL_TASK_STACK,  CHASSIS_CTRL_TASK_PRIO  },
+	{ contract_CanRecvTask, "CAN_RX", CHASSIS_CAN_TASK_STACK,   CHASSIS_CAN_TASK_PRIO   },
+	{ contract_StateTask,   "STATE",  CHASSIS_STATE_TASK_STACK, CHASSIS_STATE_TASK_PRIO },
 };
 
 #define TASK_NUM	(sizeof(s_tasks) / sizeof(s_tasks[0]))
@@ -86,7 +86,7 @@ static void ALL_Init(void)
 	oled_Init();                           // OLED 状态屏（软件 I2C）
 	nav_Init();                            // 编排层：装载默认地图，不自动启动
 	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁
-	chassis_Init();                        // 状态机事件队列
+	contract_Init();                        // 状态机事件队列
 	App_TaskCreate();                      // 按任务表创建所有任务
 }
 
