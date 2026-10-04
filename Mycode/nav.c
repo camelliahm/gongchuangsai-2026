@@ -29,10 +29,9 @@ static struct {
 	uint16_t		seg;
 	uint32_t		segTick;
 	uint16_t		hold;
+	uint8_t			pendStart;		/* 1 = 收到启动请求，等控制环上下文里装载 */
 
-	/* 连续航向：自累加，规避 chassisDrive.odomYaw 的 ±180 归一化跳变 */
-	float			yaw;
-	float			lastYaw;
+	/* 航向不再本层维护：直接用 chassisDrive.odomYawCont（连续域） */
 	float			targetYaw;
 
 	/* 本段起点：位移判据在"段方向"上做投影，横向漂移不干扰 */
@@ -43,6 +42,7 @@ static struct {
 
 /**
  * @brief  把角度折到 [-180, 180]
+ * @note   只用于段起始航向 —— 位移投影用 sinf/cosf，折回后参数更小、精度更好
  * @author camelliahm
  */
 static float nav_WrapDeg(float deg)
@@ -53,22 +53,8 @@ static float nav_WrapDeg(float deg)
 }
 
 /**
- * @brief  用里程计的航向增量维护连续航向
- * @note   里程计航向归一到 ±180，跨过该边界会跳变 360 度；改用增量累加后，
- *         航向单调连续，转向判据与控制都不必处理环绕
- * @author camelliahm
- */
-static void nav_UpdateYaw(void)
-{
-	float now = chassisDrive.odomYaw;
-
-	s_nav.yaw += nav_WrapDeg(now - s_nav.lastYaw);
-	s_nav.lastYaw = now;
-}
-
-/**
  * @brief  开始当前航段：记录起点、推出目标航向、清速度
- * @note   目标航向以"进入本段时的航向"为基准，故里程计的绝对漂移不会累积到路线里；
+ * @note   目标航向以"进入本段时的连续航向"为基准，故里程计的绝对漂移不会累积到路线里；
  *         平移段把目标航向锁在当前航向，顺带得到跑偏抑制
  * @author camelliahm
  */
@@ -84,11 +70,13 @@ static void nav_SegStart(void)
 
 	s_nav.startX   = chassisDrive.odomX;
 	s_nav.startY   = chassisDrive.odomY;
-	s_nav.startYaw = s_nav.yaw;
+	s_nav.startYaw = nav_WrapDeg(chassisDrive.odomYawCont);
 	s_nav.hold     = 0u;
 	s_nav.segTick  = xTaskGetTickCount();
 
-	s_nav.targetYaw = s_nav.yaw + offset;
+	/* 目标航向与 odomYawCont 同在连续域，姿态环可直接相减 */
+	s_nav.targetYaw   = chassisDrive.odomYawCont + offset;
+	chassis.yawTarget = s_nav.targetYaw;
 
 	chassis.vx = 0;
 	chassis.vy = 0;
@@ -125,7 +113,7 @@ static uint8_t nav_SegStep(void)
 		chassis.vy = 0;
 		chassis.w  = 0;
 
-		err = s_nav.yaw - s_nav.targetYaw;
+		err = chassisDrive.odomYawCont - s_nav.targetYaw;
 		if (err < 0.0f) { err = -err; }
 
 		if (err > NAV_TURN_WINDOW_DEG)
@@ -194,6 +182,32 @@ static uint8_t nav_SegStep(void)
 	return 0u;
 }
 
+/**
+ * @brief  真正启动：装载第一个航段，确立航向与位移基准
+ * @note   只在控制环上下文调用（由 nav_Step() 消费启动请求时进入）
+ * @author camelliahm
+ */
+static void nav_Begin(void)
+{
+	if ((s_nav.map == NULL) || (s_nav.mapNum == 0u))
+	{
+		return;
+	}
+
+	s_nav.seg  = 0u;
+	s_nav.hold = 0u;
+
+	if (s_nav.map[0].type == NAV_SEG_END)
+	{
+		s_nav.state = NAV_DONE;
+		return;
+	}
+
+	/* 航向基准取当前连续航向，故从任意位置启动都不会引入绝对角误差 */
+	s_nav.state = NAV_RUN;
+	nav_SegStart();
+}
+
 /*---- 对外接口 ----------------------------------------*/
 
 /**
@@ -208,8 +222,7 @@ void nav_Init(void)
 	s_nav.seg       = 0u;
 	s_nav.segTick   = 0u;
 	s_nav.hold      = 0u;
-	s_nav.yaw       = 0.0f;
-	s_nav.lastYaw   = 0.0f;
+	s_nav.pendStart = 0u;
 	s_nav.targetYaw = 0.0f;
 	s_nav.startX    = 0.0f;
 	s_nav.startY    = 0.0f;
@@ -236,33 +249,21 @@ bool nav_Load(const NavSeg_t *segs, uint16_t num)
 }
 
 /**
- * @brief  从第一个航段开始执行
- * @note   航向基准取当前里程计航向，故从任意位置启动都不会引入绝对角误差
+ * @brief  请求从第一个航段开始执行（只置标志，不直接改状态）
+ * @note   调用方通常是状态机任务，优先级低于控制环任务；直接写 s_nav 会在
+ *         装载中途被抢占，让控制环读到半新半旧的段基准。改由 nav_Step()
+ *         在控制环上下文里统一装载，该跨任务窗口即被消除
  * @author camelliahm
  */
 void nav_Start(void)
 {
-	if ((s_nav.map == NULL) || (s_nav.mapNum == 0u))
-	{
-		return;
-	}
-
-	s_nav.seg     = 0u;
-	s_nav.yaw     = chassisDrive.odomYaw;
-	s_nav.lastYaw = chassisDrive.odomYaw;
-	s_nav.state   = NAV_RUN;
-
-	if (s_nav.map[0].type == NAV_SEG_END)
-	{
-		s_nav.state = NAV_DONE;
-		return;
-	}
-
-	nav_SegStart();
+	s_nav.pendStart = 1u;
 }
 
 /**
- * @brief  中止导航并清速度（故障 / 急停 / 外部取消时调用）
+ * @brief  中止导航并清速度
+ * @note   正常路径由 nav_Step() 在控制环上下文里调用（离开 RUNNING 时归位）；
+ *         外部调用亦可，但需自行承担与 nav_Step() 的并发
  * @author camelliahm
  */
 void nav_Abort(void)
@@ -275,19 +276,27 @@ void nav_Abort(void)
 }
 
 /**
- * @brief  编排层周期推进
- * @note   暂未接入 contract_ControlStep()；接入点应放在 RUNNING 闸门之后、chassis_DriveStep() 之前，
- *         这样急停与故障的保护可原样继承，本函数只写 chassis.vx/vy，不直接驱动车轮
+ * @brief  编排层周期推进（控制环调用，5ms）
+ * @note   在 contract_ControlStep() 的 RUNNING 闸门**之前**调用是必须的：
+ *         本函数自带"离开 RUNNING 即中止并交还控制权"的归位逻辑，放到
+ *         闸门之后会让该逻辑永远不可达 —— 于是停车或急停后再进 RUNNING，
+ *         导航会拿着失效的段基准接着往下跑。
+ *         只写 chassis.vx/vy/w 与 chassis.yawTarget，不直接驱动车轮
  * @author camelliahm
  */
 void nav_Step(void)
 {
+	/* 启动请求在本上下文消费：装载过程不会被状态机任务打断 */
+	if (s_nav.pendStart)
+	{
+		s_nav.pendStart = 0u;
+		nav_Begin();
+	}
+
 	if (s_nav.state != NAV_RUN)
 	{
 		return;
 	}
-
-	nav_UpdateYaw();
 
 	/* 一旦离开 RUNNING（故障 / 急停 / 被停车），立即交出控制权 */
 	if (chassis.state != CHS_RUNNING)
@@ -343,8 +352,8 @@ uint16_t nav_GetSeg(void)
 }
 
 /**
- * @brief  读姿态环给定航向
- * @note   接入时把 chassis_DriveStep() 中姿态环的 0.0f 换成本函数返回值，转向才会生效
+ * @brief  读姿态环给定航向（调试 / 观察用）
+ * @note   驱动层通过黑板 chassis.yawTarget 取该给定，不依赖本函数
  * @author camelliahm
  */
 float nav_GetTargetYaw(void)

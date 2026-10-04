@@ -84,6 +84,28 @@ void chassis_DriveBroadcast(uint8_t action)
 }
 
 /**
+ * @brief  向四台驱动器下发零速（软停），由驱动器按 acc 斜率自行减速
+ * @note   Emm_V5_Vel_Control 的 vel=0 是合法命令，效果是"目标速度 0"而非急停；
+ *         与 chassis_DriveBroadcast(2)（Stop_Now 立即停止）区分。
+ *         BRAKING 期间须由控制环逐周期调用：只发一次会被同一周期内
+ *         已进入 chassis_DriveStep() 的残留速度指令覆盖
+ * @author camelliahm
+ */
+void chassis_BrakeWheels(void)
+{
+	uint8_t i;
+	uint8_t addr;
+
+	can_TxLock();
+	for (i = 0; i < CHASSIS_MOTOR_NUM; i++)
+	{
+		addr = (uint8_t)(CHASSIS_ADDR_MOTOR_BASE + i);
+		Emm_V5_Vel_Control(addr, 0, 0, CHASSIS_DRIVE_ACC_DEFAULT, false);
+	}
+	can_TxUnlock();
+}
+
+/**
  * @brief  打开四台驱动器的定时上报（掉线检测与停稳判断的依据）
  * @note   上报周期 CHASSIS_FB_PERIOD_MS，4 台合计约 200 帧/s，
  *         在 500 kbit/s 总线上约占 5% 带宽
@@ -284,7 +306,9 @@ void chassis_CheckBraking(void)
 
 /**
  * @brief  里程计推算：由四轮反馈转速反推车体位移与偏航
- * @note   轮序约定：0=左前 1=右前 2=左后 3=右后；用"反馈转速 × 周期"估算每轮位移
+ * @note   轮序约定：0=左前 1=右前 2=左后 3=右后；用"反馈转速 × 周期"估算每轮位移。
+ *         航向输出两个版本：odomYawCont 连续（航向误差一律用它），
+ *         odomYaw 是它的归一化副本（仅供内部泰勒展开近似）。
  *         ⚠ 骨架实现：轮径/减速比/轮距均为占位值，轮序与符号必须与实车装配一致，
  *           未标定前里程计不可依赖（否则方向相反、距离失准）
  * @author camelliahm
@@ -323,7 +347,7 @@ static void chassis_UpdateOdom(void)
 
 	/* 把位移增量投影到世界坐标系（用当前 yaw 旋转）。
 	 * 用泰勒展开算 sin/cos，避免引入 math 库的重型 sinf/cosf；
-	 * 里程计角度本身有累积误差，这个精度足够。 */
+	 * ⚠ 泰勒展开只在 |角| 小时准确，故这里取归一化副本 odomYaw 而非常量累加的 odomYawCont。 */
 	yawRad = chassisDrive.odomYaw * 3.14159265f / 180.0f;
 	x2     = yawRad * yawRad;
 	s      = yawRad * (1.0f - x2 / 6.0f + x2 * x2 / 120.0f);	/* sin 近似 */
@@ -332,9 +356,12 @@ static void chassis_UpdateOdom(void)
 	chassisDrive.odomX += dx * c - dy * s;
 	chassisDrive.odomY += dx * s + dy * c;
 
-	chassisDrive.odomYaw += dyaw;
+	/* 航向走连续域：单调累加，跨 ±180 不跳变，导航到位判据与姿态环
+	 * 的误差才有意义（否则 179°→-180° 会算出几百度的假误差） */
+	chassisDrive.odomYawCont += dyaw;
 
-	/* 归一化到 [-180, 180] */
+	/* 归一化副本：内部三角函数近似与对外显示用 */
+	chassisDrive.odomYaw = chassisDrive.odomYawCont;
 	while (chassisDrive.odomYaw >  180.0f) { chassisDrive.odomYaw -= 360.0f; }
 	while (chassisDrive.odomYaw < -180.0f) { chassisDrive.odomYaw += 360.0f; }
 }
@@ -421,9 +448,10 @@ void chassis_DriveStep(void)
 	/* 1. 里程计：由四轮反馈推算当前位姿 */
 	chassis_UpdateOdom();
 
-	/* 2. 姿态环：抑制跑偏，目标 yaw 恒为 0（保持航向）。PID_Calculate 按
-	 *    Err = target - measure 计算；要转到指定角度就把下面的 0.0f 换掉 */
-	yawFix = PID_Calculate(&s_yawPid, chassisDrive.odomYaw, 0.0f);
+	/* 2. 姿态环：给定航向由编排层写在黑板（chassis.yawTarget），误差在
+	 *    连续航向域上计算，跨 ±180 不会算出整圈的假误差。
+	 *    PID_Calculate 按 Err = target - measure 计算 */
+	yawFix = PID_Calculate(&s_yawPid, chassisDrive.odomYawCont, chassis.yawTarget);
 	/* 3. 姿态修正量叠加到角速度指令上（限幅，防止修正量盖过用户指令） */
 	if (yawFix >  YAW_PID_OUT_MAX) { yawFix =  YAW_PID_OUT_MAX; }
 	if (yawFix < -YAW_PID_OUT_MAX) { yawFix = -YAW_PID_OUT_MAX; }
@@ -456,9 +484,10 @@ void chassis_DriveInit(void)
 		chassisDrive.wheelTarget[i] = 0;
 	}
 
-	chassisDrive.odomX   = 0.0f;
-	chassisDrive.odomY   = 0.0f;
-	chassisDrive.odomYaw = 0.0f;
+	chassisDrive.odomX       = 0.0f;
+	chassisDrive.odomY       = 0.0f;
+	chassisDrive.odomYaw     = 0.0f;
+	chassisDrive.odomYawCont = 0.0f;
 
 	/* 姿态环必开积分限幅（抗饱和）+ 微分先行（避免目标突变冲击）；参数顺序：
 	 * max_out / integral_limit / deadband / kp / ki / kd / A / B / 输出滤波 / 微分滤波 / 改进位掩码

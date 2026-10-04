@@ -1,6 +1,7 @@
 #include "contract.h"
 #include "chassis_drive.h"
 #include "auxiliary.h"
+#include "nav.h"
 #include "can.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -83,10 +84,11 @@ static void contract_OnEnter(ChassisState_t s)
 
 	case CHS_RUNNING:
 		chassis.vx = 0; chassis.vy = 0; chassis.w = 0;
+		nav_Start();	/* 从第 0 段重跑；实际装载由控制环在 nav_Step() 里完成 */
 		break;
 
 	case CHS_BRAKING:
-		/* 只把目标速度清零，由控制环逐周期减速，而不是急停 */
+		/* 只清目标速度；实际减速由控制环在 BRAKING 分支里逐周期下发零速 */
 		chassis.vx = 0; chassis.vy = 0; chassis.w = 0;
 		break;
 
@@ -252,8 +254,9 @@ void contract_Init(void)
 	s_evtQueue = xQueueCreate(CHASSIS_EVT_QUEUE_LEN, sizeof(ChassisEvtMsg_t));
 	configASSERT(s_evtQueue != NULL);
 
-	chassis.state   = CHS_IDLE;
-	chassis.lastCmd = CMD_NONE;
+	chassis.state     = CHS_IDLE;
+	chassis.lastCmd   = CMD_NONE;
+	chassis.yawTarget = 0.0f;
 
 	chassis_DriveInit();	/* 四轮槽位、里程计、姿态环 PID */
 	aux_Init();				/* 升降轴槽位 */
@@ -379,7 +382,7 @@ void contract_StateTask(void *pvParameters)
 
 /**
  * @brief  控制环周期内调用（每 CHASSIS_CTRL_PERIOD_MS 一次）
- * @note   编排顺序：各模块看门狗 → 各模块周期判断 → RUNNING 下驱动底盘。
+ * @note   编排顺序：各模块看门狗 → 各模块周期判断 → 编排层推进 → 按状态驱动底盘。
  *         各模块内部只做"自己的事"，互不干涉。
  * @author camelliahm
  */
@@ -392,13 +395,22 @@ void contract_ControlStep(void)
 	/* 2. 停车过程的停稳判断（可能投递 EV_ARRIVED） */
 	chassis_CheckBraking();
 
-	/* 3. 只有在 RUNNING 下才驱动底盘 */
-	if (chassis.state != CHS_RUNNING)
-	{
-		return;
-	}
+	/* 3. 编排层推进：内部自判状态，离开 RUNNING 即中止并交还控制权。
+	 *    放在闸门之前是必须的 —— 它的归位逻辑靠"每周期都被调用"才能生效 */
+	nav_Step();
 
-	chassis_DriveStep();	/* 里程计 → 逆运动学 → 姿态环 → 下发四轮 */
+	/* 4. 按状态驱动底盘 */
+	if (chassis.state == CHS_RUNNING)
+	{
+		chassis_DriveStep();	/* 里程计 → 逆运动学 → 姿态环 → 下发四轮 */
+	}
+	else if (chassis.state == CHS_BRAKING)
+	{
+		/* 减速停：目标速度已清零，这里逐周期重发零速，
+		 * 覆盖同一周期内可能已下发的残留 RUNNING 速度指令 */
+		chassis_BrakeWheels();
+	}
+	/* 其余状态（IDLE / READY / FAULT / ESTOP）不下发任何速度 */
 }
 
 /**

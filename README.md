@@ -51,13 +51,17 @@
 
 > 这是最小形态。扩展到"所有模块统一按消息接入"的完整约定，见 **§2 模块间通信**。
 
-> **⚠ 新增的模块尚未接入控制环。**
-> `nav` / `input` / `screen` / `servo` / `oled` 的硬件已在 `APP/main.c` 里初始化
+> **⚠ 尚未接入控制环的模块。**
+> `input` / `screen` / `servo` / `oled` 的硬件已在 `APP/main.c` 里初始化
 > （`screen` 无独立初始化入口，其软件槽位由 `input_Init()` 末尾调 `screen_Init()` 归零），但
-> **`nav_Step()` / `input_Step()` / `screen_Step()` / `vision_Step()` / `oled_Step()` 都没有调用点，
+> **`input_Step()` / `screen_Step()` / `vision_Step()` / `oled_Step()` 都没有调用点，
 > 舵机也无人下达角度**。它们现在是"装好了但没接线的部件"——接入位置与前置条件见 **§6**。
 > ⚠ 也正因如此，`vision_Step()` 与整条视觉解析链当前被链接器当未引用段丢弃，
 > **`Program Size` 的 Code 增量不代表它的真实体积**。
+>
+> **编排层 `nav` 已接入控制环**：`nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门
+> **之前**执行，启动由 `contract_OnEnter(CHS_RUNNING)` 触发，姿态环给定经黑板 `chassis.yawTarget` 传递。
+> ⚠ 但**前置条件未满足**——里程计标定参数与姿态环 PID 全是占位值，当前是"通了但不准"，见 §6。
 >
 > **视觉模块 2 仍有两项内容未定稿**（见 §6）：避障帧（`0xF3`）的数据内容、视场角 / 安装姿态。
 > 未定稿项的标定进度记在 `MEMORY.md`。
@@ -71,7 +75,7 @@
 这不是要把 ROS 搬进单片机，而是把「**统一接口形状 + 一张注册表**」定为新增模块的标准接入方式。
 目的只有两个：**加模块不用改已有模块；多人可以按冻结的契约并行开发。**
 
-> **现状**：接口形状与**路由注册表**均已就位（L2）；编排层 `nav` 已建，**尚未接入控制环**。
+> **现状**：接口形状、**路由注册表**（L2）与**编排层 `nav`** 均已就位，`nav` 已接入控制环。
 
 ### 2.1 五个要素
 
@@ -81,7 +85,7 @@
 | **节点** | 每个机构 = 一个 `xxx_HandleCmd()` + 一个 `xxx_Step()`，**不新开任务** | 已有（`auxiliary.c` 就是这个形状） |
 | **路由** | 一张 `{ 消息码段 → handler }` 注册表 | **已有**（`contract.c` 的 `s_routeTable[]`，`contract_HandleCmd()` 按段查表派发） |
 | **黑板** | 全局 `chassis` 结构体：编排层写目标，模块写状态 | 已有 |
-| **编排** | 任务层 `nav`：决定机构的组合与先后顺序 | **已建**（未接入控制环） |
+| **编排** | 任务层 `nav`：决定机构的组合与先后顺序 | **已建**（已接入控制环） |
 
 ### 2.2 消息码分段
 
@@ -196,7 +200,7 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | 2 | `servo_Init()` | 三路舵机 PWM（TIM3 CH1~CH3）— ⚠ 未接入控制环 |
 | 3 | `input_Init()` | 三条串口（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ 视觉2 帧槽位归零；**末尾调 `screen_Init()`** 归零串口屏槽位 — ⚠ 未接入控制环 |
 | 4 | `oled_Init()` | OLED 状态屏（软件 I2C）— ⚠ 未接入控制环 |
-| 5 | `nav_Init()` | 编排层：装载默认地图，不自动启动 — ⚠ 未接入控制环 |
+| 5 | `nav_Init()` | 编排层：装载默认地图，不自动启动（启动由进入 RUNNING 触发） |
 | 6 | `can_RtosInit()` | 建 CAN 接收队列 + 发送互斥锁 |
 | 7 | `contract_Init()` | 建事件队列 → `chassis_DriveInit()` + `aux_Init()` |
 | 8 | `App_TaskCreate()` | 按任务表 `s_tasks[]` 建任务 |
@@ -351,8 +355,13 @@ Data[7]     保留填 0
 | IDLE | 断使能 + 清在线标志 | 断使能 + 清在线 |
 | READY | 使能 + 开 `S_VEL` 上报（20 ms）+ 重置心跳 | 使能 + 开 `S_CPOS` 上报（50 ms） |
 | RUNNING | 清 `vx/vy/w` | —— |
-| BRAKING | 只清目标速度，由控制环逐周期减速（**不是**急停） | —— |
+| BRAKING | 清 `vx/vy/w`；控制环逐周期下发零速软停（**不是**急停） | —— |
 | FAULT / ESTOP | `Stop_Now` 立即停止 + `faultCnt++` | 断使能（**不是** `Stop_Now`，见 §7） |
+
+> ⚠ **BRAKING 的减速由控制环执行，不在 `contract_OnEnter()` 里**：`contract_ControlStep()`
+> 在 BRAKING 分支里每周期调 `chassis_BrakeWheels()` 下发零速。只发一次是不够的 —— 状态机任务
+> 优先级低于控制环，存在"控制环已进入 `chassis_DriveStep()` 下发旧速度、状态机随后改成
+> BRAKING"的交叠窗口，那帧旧速度会盖掉先发的零速。
 
 ### 两条自动保护
 
@@ -376,27 +385,43 @@ Data[7]     保留填 0
 | **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `chassis_drive.c` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
 | **改状态迁移**<br>加新状态、改转移条件 | `contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
 | **改协议**<br>新指令码、新地址 | `contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
-| **改任务编排**<br>地图、动作序列 | `nav.c` | `s_defaultMap[]` 换成赛题路线；接入点见 §6 |
+| **改任务编排**<br>地图、动作序列 | `nav.c` | `s_defaultMap[]` 换成赛题路线；启停方式与航向基准见下文「已接入控制环的模块」 |
 | **加数据源**<br>第二个相机、新传感器串口 | `input.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉模块 2 见 `vision_Step()`） |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
 | **接避障层**<br>反应式优先级抑制 | 新建 `avoid.c`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
 | **改状态屏内容** | `oled.c` | `oled_ShowStatus()` |
 | **换舵机 / 标定行程** | `servo.h` | `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US` |
 
+### 已接入控制环的模块
+
+| 模块 | 接入形态 | 残留前置条件 |
+| --- | --- | --- |
+| `nav`（编排层） | `nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门**之前**调用；启动由 `contract_OnEnter(CHS_RUNNING)` 里的 `nav_Start()` 触发；姿态环给定经黑板 `chassis.yawTarget` 传递 | **里程计标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号）与**姿态环 PID 参数**——仍是占位值 |
+
+> **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
+> 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
+> "每周期都被调用"才成立；放到闸门之后就变成死代码。
+> 保护并未因此削弱 —— `nav_Step()` 只写黑板 `chassis.vx/vy/w` 与 `chassis.yawTarget`，不碰车轮，
+> 真正的下发仍被闸门挡在 RUNNING 之内。
+>
+> 另一个配套约定：**航向误差一律在连续域上算**。`chassisDrive.odomYawCont` 单调累加、
+> 跨 ±180 不跳变，导航到位判据与姿态环 PID 都读它；`odomYaw` 只是它的归一化副本，
+> 供内部的泰勒展开近似使用。若拿归一化值相减，179° → -180° 会算出几百度的假误差。
+
 ### 未接入模块怎么接进来
 
-五个模块都按"**硬件就绪、逻辑自洽、只差一行调用**"的形态交付：
+四个模块都按"**硬件就绪、逻辑自洽、只差一行调用**"的形态交付：
 
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
-| `nav` | 在 `contract_ControlStep()` 的 `if (state != CHS_RUNNING) return;` **之后**、`chassis_DriveStep()` **之前**加 `nav_Step()` | **里程计必须先标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号仍是占位值）；另需把 `chassis_DriveStep()` 姿态环的给定 `0.0f` 换成 `nav_GetTargetYaw()`，转向才会生效 |
 | `input`（三条串口） | 在控制环里加 `input_Step()`（200 Hz 已高于任何相机帧率）；视觉模块 2 另加 `vision_Step()` | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 视觉1 的解析尚未实现、其字节无人取用，`lockCnt` 会持续增长（视觉2 由 `vision_Step()` 消费、串口屏由 `screen_Step()` 消费） |
 | `screen`（串口屏协议） | 加 `screen_Step()`（须在**任务上下文**调用——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ 约束是**单向**的：漏接 `screen_Step()` 会让屏上报的字节堆在环形缓冲里；反过来漏接 `input_Step()` 只丢 USART2 通道的 `rxCnt / lockCnt` 诊断（`screen_Step()` 自带在线判断，可独立工作） |
 | `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
 | `servo` | 由上层直接调 `servo_SetAngle()` / `servo_SetPulse()` | 无。若要受安全闸门约束，需在 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 分支登记失能 |
 
-> `nav_Step()` 放在 RUNNING 闸门**之后**是关键：非 RUNNING 时它根本不会被执行，
-> 于是急停、故障、停车的保护全部免费继承，任务层不需要任何额外的安全判断。
+> 新模块的周期处理挂进 `contract_ControlStep()` 的编排序列里；**插入位置由该模块自身的
+> 归位需求决定** —— 需要"每周期都被调用才能自保"的（如 `nav_Step()`）放在闸门之前，
+> 纯执行类、不需要自保的放在闸门之后。
 
 ### 视觉模块 2（`input.c` 的视觉段）：帧格式已定稿，两项内容留空
 
@@ -454,8 +479,8 @@ Data[7]     保留填 0
 ### 两条红线
 
 1. **`contract_ControlStep()` 不许塞算法。** 它是骨架编排，只负责按顺序调用别人：
-   `chassis_DriveWatchdog()` → `aux_Step()` → `chassis_CheckBraking()` →
-   `if (state != RUNNING) return;` → `chassis_DriveStep()`。
+   `chassis_DriveWatchdog()` → `aux_Step()` → `chassis_CheckBraking()` → `nav_Step()` →
+   `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
    新模块的周期处理挂在 ①② 之间，不要改动这个顺序。
 2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
    状态机永远只认"系统级"的事，机构细节全留在 `auxiliary.c`。

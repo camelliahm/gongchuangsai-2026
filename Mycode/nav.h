@@ -4,7 +4,8 @@
 #include "contract.h"
 
 /* 编排层（任务层）：把航段序列翻译成逐周期的底盘速度与目标航向，详见 README.md */
-/* ⚠ 尚未接入控制环：nav_Step() 目前无调用点，接入方法与前置条件见 README.md */
+/* 已接入控制环：nav_Step() 在 contract_ControlStep() 的 RUNNING 闸门之前调用；
+   启动由 OnEnter(CHS_RUNNING) 触发；航向基准取 chassisDrive.odomYawCont（连续域） */
 
 /*---- 航段类型 ----*/
 typedef enum {
@@ -44,17 +45,20 @@ void nav_Init(void);
 /* 装订地图（只存指针，调用者须保证生命周期，通常用 static const 表） */
 bool nav_Load(const NavSeg_t *segs, uint16_t num);
 
+/* 请求启动（只置标志；实际装载在 nav_Step() 的控制环上下文里完成） */
 void nav_Start(void);
+
+/* 中止并清速度。正常路径由 nav_Step() 在离开 RUNNING 时自动调用 */
 void nav_Abort(void);
 
-/* 控制环周期调用（5ms）。暂未接入 contract_ControlStep() */
+/* 控制环周期调用（5ms）。须置于 RUNNING 闸门之前，见 .c 内说明 */
 void nav_Step(void);
 
 NavState_t nav_GetState(void);
 uint16_t   nav_GetSeg(void);
 
 /* 姿态环给定：平移段锁"进入本段时的航向"，转向段推到目标航向 */
-/* ⚠ 需把 chassis_DriveStep() 里姿态环的给定 0.0f 换成本函数返回值，转向才会生效 */
+/* 驱动层经黑板 chassis.yawTarget 读取；本函数仅供观察调试 */
 float nav_GetTargetYaw(void);
 
 #endif

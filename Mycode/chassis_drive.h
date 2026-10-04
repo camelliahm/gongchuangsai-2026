@@ -39,9 +39,13 @@ typedef struct {
 typedef struct {
 	float	 odomX;				/* 里程计累计位移(mm) */
 	float	 odomY;
-	float	 odomYaw;			/* 里程计累计偏航角(度) */
+	float	 odomYaw;			/* 偏航角(度)，归一化到 [-180,180]：仅供内部 sin/cos 近似与显示 */
+	float	 odomYawCont;		/* 偏航角(度)，连续累加不归一化：航向误差一律读它 */
 	int16_t	 wheelTarget[CHASSIS_MOTOR_NUM];	/* 四轮目标转速(RPM，带符号) */
 } ChassisDrive_t;
+
+/* 航向坐标域约定：跨 ±180 的两处误差（导航到位判据、姿态环 PID）必须在
+   odomYawCont 上计算。odomYaw 归一化副本只用于内部的三角函数近似。 */
 
 extern __IO ChassisDrive_t chassisDrive;
 extern __IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];
@@ -53,6 +57,10 @@ void chassis_DriveInit(void);
 /*---- 四台电机的动作与上报 ----*/
 /* 向四台驱动器广播无参数动作：0=断使能 1=使能 2=立即停止 */
 void chassis_DriveBroadcast(uint8_t action);
+
+/* 向四台驱动器下发零速软停（速度模式，驱动器按 acc 斜率自行减速）。
+   与 chassis_DriveBroadcast(2) 的 Stop_Now 急停区分；BRAKING 期间由控制环周期调用 */
+void chassis_BrakeWheels(void);
 
 /* 打开四轮定时上报（S_VEL），进入 READY 时调用 */
 void chassis_EnableFeedback(void);

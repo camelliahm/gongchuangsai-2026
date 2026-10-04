@@ -89,6 +89,7 @@ typedef struct {
 	uint32_t	   faultCnt;	/* 进入 FAULT/ESTOP 的次数 */
 
 	int16_t		   vx, vy, w;	/* 目标底盘速度：vx/vy = mm/s，w = 0.1 度/s */
+	float		   yawTarget;	/* 姿态环给定航向(度，连续域)：编排层写，驱动层读 */
 
 	uint32_t	   stateTick;	/* 进入当前状态的 tick */
 } Chassis_t;
