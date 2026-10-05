@@ -12,6 +12,9 @@ typedef enum {
 	NAV_SEG_FORWARD,	//直行：value = 相对位移(mm)，正 = 前进
 	NAV_SEG_STRAFE,		//横移：value = 相对位移(mm)，正 = 右移
 	NAV_SEG_DWELL,		//停留：value = 时长(ms)
+	NAV_SEG_HOME,		//升降轴回零：车停原地等 lift.homed，value 忽略
+	NAV_SEG_ALIGN,		//视觉对准：读视觉1 相对距离微调底盘，value 忽略
+	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value 忽略
 } NavSegType_t;
 
 //航段：位移/转角用 value + 符号表达，speed 只对平移段有效
@@ -19,7 +22,7 @@ typedef struct {
 	uint8_t  type;		//NavSegType_t
 	int16_t  value;		//位移(mm) / 转角(0.1 度) / 时长(ms)
 	int16_t  speed;		//平移速度(mm/s)，恒正；转向与停留段忽略
-	uint16_t timeout;	//本段超时(ms)，0 = 用 NAV_SEG_TIMEOUT_MS 默认值
+	uint32_t timeout;	//本段超时(ms)；0 = 用 NAV_SEG_TIMEOUT_MS。转向/对准/装载/回零段应显式给（默认值会提前打断）
 } NavSeg_t;
 
 /*---- 导航状态 ----*/
@@ -39,6 +42,24 @@ typedef enum {
 #define NAV_DECEL_VEL		(120)		//降速后的速度(mm/s)
 #define NAV_SEG_TIMEOUT_MS	(20000u)	//平移/停留段的默认超时；转向段应显式给 timeout
 #define NAV_TURN_TIMEOUT_MS	(40000u)	//转向段建议超时（姿态环收敛慢，180° 约需 24s）
+
+/*---- 对准段（NAV_SEG_ALIGN）：⚠ 除窗口外全为占位值，待实测 ----*/
+#define NAV_ALIGN_TOL_MM		(10)		//对准到位窗口(mm)：前后 / 左右同时进入才算居中
+#define NAV_ALIGN_HOLD_MS		(200u)		//居中后需保持的时长：停住等车稳，防带速进入抓取
+#define NAV_ALIGN_KP			(0.8f)		//相对距离(mm) → 底盘速度(mm/s)，单位 1/s
+#define NAV_ALIGN_SLOW_MM		(30)		//剩余距离小于此值即降速，减小过冲
+#define NAV_ALIGN_SLOW_VEL		(30)		//降速后的速度(mm/s)
+#define NAV_ALIGN_VEL_MAX		(100)		//对准速度上限(mm/s)
+#define NAV_ALIGN_TRY_TIMEOUT_MS (6000u)	//单次对准的时限(ms)
+#define NAV_ALIGN_RETRY			(3u)		//对准超时后的重试次数（含首次共 4 次尝试）
+#define NAV_ALIGN_TIMEOUT_MS	(30000u)	//对准段的段超时(ms)：须覆盖全部重试
+
+/*---- 装载段（NAV_SEG_LOAD）----*/
+#define NAV_LOAD_RETRY			(2u)		//装载失败后的重试次数（与段内对准共用该计数）
+#define NAV_LOAD_TIMEOUT_MS		(180000u)	//装载段的段超时(ms)：须覆盖三轮动作与全部重试  ⚠ 占位值
+
+/*---- 回零段（NAV_SEG_HOME）----*/
+#define NAV_HOME_TIMEOUT_MS		(20000u)	//回零段的段超时(ms)：aux 侧的 15s 通常先投 EV_FAULT
 
 void nav_Init(void);
 

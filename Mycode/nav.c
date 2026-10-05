@@ -1,11 +1,14 @@
 #include "nav.h"
 #include "nav_map.h"
 #include "chassis_drive.h"
+#include "auxiliary.h"
+#include "vision.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <math.h>
 
 #define NAV_TURN_HOLD_CNT	(NAV_TURN_HOLD_MS / NAV_CTRL_PERIOD_MS)	//转向保持判据的周期数
+#define NAV_ALIGN_HOLD_CNT	(NAV_ALIGN_HOLD_MS / NAV_CTRL_PERIOD_MS)	//对准保持判据的周期数
 #define NAV_DEG2RAD			(0.01745329252f)	//度 → 弧度
 
 /*---- 内部状态 ----------------------------------------*/
@@ -26,6 +29,12 @@ static struct {
 	float			startX;			//本段起点 X(mm)
 	float			startY;			//本段起点 Y(mm)
 	float			startYaw;		//本段起点航向(度)
+
+	//对准 / 装载段
+	uint8_t			alignHold;		//已居中的连续周期数（保持判据）
+	uint8_t			loadAligned;	//1 = 本轮装载已对准，可以进行抓取
+	uint8_t			retry;			//本段已重试次数（对准与抓取共用该计数）
+	uint32_t		tryTick;		//本次尝试开始的 tick；重试时重置
 } s_nav;
 
 /**
@@ -41,7 +50,210 @@ static float nav_WrapDeg(float deg)
 }
 
 /**
- * @brief  开始当前航段：记录起点、推出目标航向、清速度
+ * @brief  本段判故障：投事件并中止导航
+ * @note   收敛到 FAULT 由状态机完成，本层不自行复位
+ * @author camelliahm
+ */
+static void nav_Fault(void)
+{
+	contract_PostEvent(EV_FAULT, 0);
+	nav_Abort();
+}
+
+/**
+ * @brief  取绝对值（避免引入 math 库）
+ * @author camelliahm
+ */
+static float nav_AbsF(float x)
+{
+	return (x < 0.0f) ? -x : x;
+}
+
+/**
+ * @brief  单轴对准速度：相对距离 → 底盘速度（比例控制 + 两档限幅）
+ * @param  err 相对距离(mm)，正 = 车需沿本轴正向移动
+ * @retval 目标速度(mm/s)，带符号；限幅决定大小
+ * @note   逼近窗口时改用降速档，否则 Kp 越大过冲越明显
+ * @author camelliahm
+ */
+static int16_t nav_AlignVel(int32_t err)
+{
+	float lim = (nav_AbsF((float)err) <= (float)NAV_ALIGN_SLOW_MM)
+				? (float)NAV_ALIGN_SLOW_VEL : (float)NAV_ALIGN_VEL_MAX;
+	float v = (float)err * NAV_ALIGN_KP;
+
+	if (v > lim)  { v = lim; }
+	if (v < -lim) { v = -lim; }
+
+	return (int16_t)v;
+}
+
+/**
+ * @brief  本次尝试是否超时，并对超时做出计数与重开
+ * @param  tryMs    单次尝试的时限(ms)
+ * @param  retryMax 允许的重试次数
+ * @retval 0 = 仍在时限内；1 = 已重开一次尝试；2 = 重试次数用尽
+ * @note   返回 1 时由调用方复位本次尝试的中间量（如 alignHold）；
+ *         段的总时长由 nav_Step() 的段超时兜底，本函数只算单次尝试
+ * @author camelliahm
+ */
+static uint8_t nav_TryTimeout(uint32_t tryMs, uint8_t retryMax)
+{
+	if ((xTaskGetTickCount() - s_nav.tryTick) <= pdMS_TO_TICKS(tryMs))
+	{
+		return 0u;
+	}
+
+	if (s_nav.retry >= retryMax)
+	{
+		return 2u;
+	}
+
+	s_nav.retry++;
+	s_nav.tryTick = xTaskGetTickCount();
+	return 1u;
+}
+
+/**
+ * @brief  对准控制律：按视觉1 的相对距离微调底盘，居中后停住保持
+ * @retval 1 = 已居中并保持够久；0 = 仍在收敛（含视觉离线）
+ * @note   只写 chassis.vx/vy，航向仍锁在进入本段时的姿态；
+ *         front 正 = 车需前进 → +y，left 正 = 车需左移 → −x（vx 右移为正）
+ * @author camelliahm
+ */
+static uint8_t nav_AlignCtrl(void)
+{
+	const Vision1Slot_t *vs = vision1_GetSlot();
+	float errF;
+	float errL;
+
+	//对准期间默认停住：视觉离线、居中等待都不留上一周期的残余速度
+	chassis.vx = 0;
+	chassis.vy = 0;
+
+	if (vs->online == 0u)
+	{
+		s_nav.alignHold = 0u;		//距离不可信：不动作，等恢复或超时
+		return 0u;
+	}
+
+	errF = (float)vs->front;
+	errL = (float)vs->left;
+
+	if ((nav_AbsF(errF) > (float)NAV_ALIGN_TOL_MM)
+			|| (nav_AbsF(errL) > (float)NAV_ALIGN_TOL_MM))
+	{
+		s_nav.alignHold = 0u;
+		chassis.vy = nav_AlignVel((int32_t)vs->front);
+		chassis.vx = nav_AlignVel(-(int32_t)vs->left);
+		return 0u;
+	}
+
+	//已进入窗口：停住并保持，避免带速进入抓取
+	s_nav.alignHold++;
+	return (s_nav.alignHold >= NAV_ALIGN_HOLD_CNT) ? 1u : 0u;
+}
+
+/**
+ * @brief  对准段：单次时限 + 超时重试，重试用尽才判故障
+ * @retval 1 = 对准完成；0 = 进行中或已判故障
+ * @author camelliahm
+ */
+static uint8_t nav_AlignStep(void)
+{
+	uint8_t t;
+
+	//重开尝试 / 判故障的那一周期也不留上一周期的残余速度
+	chassis.vx = 0;
+	chassis.vy = 0;
+
+	t = nav_TryTimeout(NAV_ALIGN_TRY_TIMEOUT_MS, NAV_ALIGN_RETRY);
+
+	if (t == 2u)
+	{
+		nav_Fault();
+		return 0u;
+	}
+
+	if (t == 1u)
+	{
+		s_nav.alignHold = 0u;		//重开一次尝试：从当前位置重新收敛
+		return 0u;
+	}
+
+	return nav_AlignCtrl();
+}
+
+/**
+ * @brief  装载段：每轮先对准再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
+ * @retval 1 = 三轮装满；0 = 进行中或已判故障
+ * @note   机构空闲时才发起下一轮，抓取失败按 NAV_LOAD_RETRY 重发（grip_LoadOnce 会清故障位）；
+ *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接判故障
+ * @author camelliahm
+ */
+static uint8_t nav_LoadStep(void)
+{
+	uint8_t t;
+
+	//机构动作期间车必须停稳，底盘只由对准步微调
+	chassis.vx = 0;
+	chassis.vy = 0;
+
+	if (grip_AllLoaded() == true)
+	{
+		return 1u;
+	}
+
+	if (grip_IsBusy() == true)
+	{
+		return 0u;
+	}
+
+	if (s_nav.loadAligned == 0u)
+	{
+		t = nav_TryTimeout(NAV_ALIGN_TRY_TIMEOUT_MS, NAV_ALIGN_RETRY);
+		if (t == 2u)
+		{
+			nav_Fault();
+			return 0u;
+		}
+		if (t == 1u)
+		{
+			s_nav.alignHold = 0u;
+			return 0u;
+		}
+
+		if (nav_AlignCtrl() == 0u)
+		{
+			return 0u;
+		}
+
+		s_nav.loadAligned = 1u;
+	}
+
+	if (grip.fault != 0u)		//上一轮失败：计数后重发，重试用尽才判故障
+	{
+		if (s_nav.retry >= NAV_LOAD_RETRY)
+		{
+			nav_Fault();
+			return 0u;
+		}
+		s_nav.retry++;
+	}
+
+	if (grip_LoadOnce() == false)
+	{
+		nav_Fault();
+		return 0u;
+	}
+
+	s_nav.loadAligned = 0u;		//下一轮回到对准步
+	s_nav.tryTick     = xTaskGetTickCount();
+	return 0u;
+}
+
+/**
+ * @brief  开始当前航段：记录起点、推出目标航向、清速度、复位本段重试与判据
  * @note   目标航向以"进入本段时的连续航向"为基准，故里程计的绝对漂移不会累积到路线里；
  *         平移段把目标航向锁在当前航向，顺带得到跑偏抑制
  * @author camelliahm
@@ -49,6 +261,7 @@ static float nav_WrapDeg(float deg)
 static void nav_SegStart(void)
 {
 	const NavSeg_t *seg = &s_nav.map[s_nav.seg];
+	uint32_t now = xTaskGetTickCount();
 	float offset = 0.0f;
 
 	if (seg->type == NAV_SEG_TURN)
@@ -60,7 +273,19 @@ static void nav_SegStart(void)
 	s_nav.startY   = chassisDrive.odomY;
 	s_nav.startYaw = nav_WrapDeg(chassisDrive.odomYawCont);
 	s_nav.hold     = 0u;
-	s_nav.segTick  = xTaskGetTickCount();
+	s_nav.segTick  = now;
+
+	//本段的重试与居中判据都从零开始，段间不继承
+	s_nav.tryTick     = now;
+	s_nav.retry       = 0u;
+	s_nav.alignHold   = 0u;
+	s_nav.loadAligned = 0u;
+
+	//装载的前置条件是升降轴已回零，故进入回零段时触发一次（完成由 aux 侧置 homed）
+	if ((seg->type == NAV_SEG_HOME) && (lift.homed == 0u))
+	{
+		lift_Home();
+	}
 
 	//目标航向与 odomYawCont 同在连续域，姿态环可直接相减
 	s_nav.targetYaw   = chassisDrive.odomYawCont + offset;
@@ -73,7 +298,8 @@ static void nav_SegStart(void)
 
 /**
  * @brief  执行当前航段，本段完成时返回 1
- * @note   转向段只判到位，转角速度由姿态环 PID 产生；平移段按"位移在段方向上的投影"判到位
+ * @note   转向段只判到位，转角速度由姿态环 PID 产生；平移段按"位移在段方向上的投影"判到位；
+ *         回零 / 对准 / 装载三段各自管住自己的重试，段超时只作兜底
  * @author camelliahm
  */
 static uint8_t nav_SegStep(void)
@@ -111,6 +337,17 @@ static uint8_t nav_SegStep(void)
 
 		s_nav.hold++;
 		return (s_nav.hold >= NAV_TURN_HOLD_CNT) ? 1u : 0u;
+
+	case NAV_SEG_HOME:
+		chassis.vx = 0;
+		chassis.vy = 0;
+		return (lift.homed != 0u) ? 1u : 0u;	//回零在进入本段时已触发，这里只等结果
+
+	case NAV_SEG_ALIGN:
+		return nav_AlignStep();
+
+	case NAV_SEG_LOAD:
+		return nav_LoadStep();
 
 	case NAV_SEG_END:
 	default:
@@ -214,6 +451,11 @@ void nav_Init(void)
 	s_nav.startX    = 0.0f;
 	s_nav.startY    = 0.0f;
 	s_nav.startYaw  = 0.0f;
+
+	s_nav.alignHold   = 0u;
+	s_nav.loadAligned = 0u;
+	s_nav.retry       = 0u;
+	s_nav.tryTick     = 0u;
 }
 
 /**
@@ -272,7 +514,7 @@ void nav_Abort(void)
  */
 void nav_Step(void)
 {
-	uint16_t tmo;
+	uint32_t tmo;
 
 	//启动请求在本上下文消费：装载过程不会被状态机任务打断
 	if (s_nav.pendStart)
@@ -300,10 +542,9 @@ void nav_Step(void)
 		tmo = NAV_SEG_TIMEOUT_MS;
 	}
 
-	if ((xTaskGetTickCount() - s_nav.segTick) > pdMS_TO_TICKS((uint32_t)tmo))
+	if ((xTaskGetTickCount() - s_nav.segTick) > pdMS_TO_TICKS(tmo))
 	{
-		contract_PostEvent(EV_FAULT, 0);
-		nav_Abort();
+		nav_Fault();
 		return;
 	}
 

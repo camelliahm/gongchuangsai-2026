@@ -68,9 +68,10 @@
 > 以及**夹持机构**（`auxiliary.c`，由 `aux_Step()` 推进 —— 旋转轴斜坡 + 装载动作序列，
 > 舵机角度由此下发；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记）。
 > 四者都**前置条件未满足／能力未兑现**：nav 的里程计标定参数与姿态环 PID 全是占位值（"通了但不准"），
-> `input_Step()` 里除摁键外的两条串口解析仍无人消费，视觉模块 1 的解析结果目前**只进槽位、还没有消费者**
-> （对准段尚未实现），夹持机构则**无人触发装载序列**（装载段尚未实现），且抓取 / 落盘 / 安全三个高度、
-> 夹子开合角、旋转斜坡速率全为占位值。均见 §6。
+> 视觉模块 1 的解析结果已被**对准段**消费（`nav.c` 的 `nav_AlignStep()`），夹持机构的装载序列
+> 已被**装载段**触发（`nav_LoadStep()`，三轮 + 失败重试，前置 `NAV_SEG_HOME` 段负责回零），
+> 但抓取 / 落盘 / 安全三个高度、夹子开合角、旋转斜坡速率、对准增益与窗口**全为占位值**。
+> 均见 §6。
 >
 > **视觉模块 2 仍有两项内容未定稿**（见 §6）：避障帧（`0xF3`）的数据内容、视场角 / 安装姿态。
 > 未定稿项的标定进度记在 `MEMORY.md`。
@@ -361,7 +362,7 @@ Data[7]     保留填 0
 - 一轮结束 `grip.loadCount++`；**共 `GRIP_LOAD_TOTAL = 3` 轮**，全部完成才 `grip_AllLoaded()`。
 - 每轮都回到安全位（90°），下一轮从 90° 再回取料位 —— 与"车停原处、每轮视觉微调后取"一致。
 - **序列 ≠ 编排**：本层只管机构动作，不含底盘移动，也不判断"什么时候该装"；
-  对准与"三轮何时结束"由编排层决定（尚未实现，见 §6）。
+  对准与"三轮何时结束"由编排层的 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` 决定（见 §6）。
 
 | 对外接口 | 说明 |
 | --- | --- |
@@ -445,7 +446,8 @@ Data[7]     保留填 0
 | **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `chassis_drive.c` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
 | **改状态迁移**<br>加新状态、改转移条件 | `contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
 | **改协议**<br>新指令码、新地址 | `contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
-| **改默认路线**<br>动作序列、航段表 | `nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文 |
+| **改默认路线**<br>动作序列、航段表 | `nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文。⚠ 段类型是 `nav.h` 的 `NavSegType_t`，加新类型要同时改 `nav_SegStep()` |
+| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `auxiliary.h` 的 `GRIP_*` |
 | **改场地几何**<br>区域位置、尺寸 | `nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav.c` 只做引擎 |
 | **加数据源**<br>第二个相机、新传感器串口 | `input.c` + `vision.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉见 `vision.c` 的 `vision_Step()`）。⚠ `input.c` 另有「摁键」小节，新增通道时不要混进去 |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
@@ -474,12 +476,14 @@ Data[7]     保留填 0
   修正，不能只靠本表开环跑。
 
 `nav_map.h` 末尾的 `s_defaultMap[]` 是**初赛单程路线**（启停区 1 → 读码 → 原料区 → 粗加工区 →
-暂存区 → 启停区 1，18 段 + END），**段值全部写成同文件场地常量的表达式**，表里不出现裸数字。
+暂存区 → 启停区 1，20 段 + END），**段值全部写成同文件场地常量的表达式**，表里不出现裸数字。
 三个前提写在表上方的注释里：起点位姿（启停区 1 中心，机头朝 +X）、转向正方向（逆时针为正，
 实车反向则 TURN 段取负）、随机项取中值。运行时由 `nav_Init()` 装载（`nav_Load()` 可换任意表）。
 
 > 转向段显式给 `timeout = NAV_TURN_TIMEOUT_MS`：姿态环一阶时间常数约 5 s，**180° 约需 24 s**，
 > 超过默认的 20 s 单段超时。平移/停留段用默认 `NAV_SEG_TIMEOUT_MS`，保持较紧的卡死检测。
+> 回零 / 对准 / 装载段同样**必须显式给**（`NAV_HOME_TIMEOUT_MS` / `NAV_ALIGN_TIMEOUT_MS` /
+> `NAV_LOAD_TIMEOUT_MS`）—— 它们比默认的 20 s 长，段超时在这三段里只作兜底。
 
 ### 摁键自启动（板内自举）
 
@@ -505,7 +509,7 @@ Data[7]     保留填 0
 2. 到点**重新判定一次状态**再投事件：`IDLE` → 投 `EV_ENABLE` + `EV_START`（一步到 `RUNNING`）；
    `READY` → 只投 `EV_START`；其余状态（3 s 内被后门改动过）**放弃本次启动**。
 3. 进入 `RUNNING` 的动作里带 `nav_Start()`，于是车开始跑 `nav_map.h` 的默认路线 ——
-   **摁键的实质是"开始跑那条 18 段路线"**，不是"上电就走"。
+   **摁键的实质是"开始跑那条 20 段路线"**，不是"上电就走"。
 
 - **按下即锁存**，中途松手不取消；计时窗口内再按不生效。
 - **上电时以当前电平为基准**，所以"摁键被压住时上电"不产生按下边沿 —— 避免上电即跑车。
@@ -524,8 +528,9 @@ Data[7]     保留填 0
 | --- | --- | --- |
 | `nav`（编排层） | `nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门**之前**调用；启动由 `contract_OnEnter(CHS_RUNNING)` 里的 `nav_Start()` 触发；姿态环给定经黑板 `chassis.yawTarget` 传递 | **里程计标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号）与**姿态环 PID 参数**——仍是占位值 |
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
-| `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。⚠ **目前无消费者** —— 对准段（读 `vision1_GetSlot()` 写底盘速度）尚未实现 |
-| `夹持机构`（`auxiliary.c`） | `aux_Step()` 在编排序列第 1 步调用，内含 `rot_Step()`（旋转轴斜坡，无条件推进）与 `grip_Step()`（装载动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()` | ⚠ **无人触发装载序列** —— 对准段 / 装载段尚未实现；抓取 / 落盘 / 安全三个高度、夹子开合角、斜坡速率全为**占位值**。`grip_IsBusy()` / `grip_AllLoaded()` 因无调用者被链接器移除 |
+| `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav.c` 的 `nav_AlignStep()` → `nav_AlignCtrl()`），但 `NAV_ALIGN_KP` / 窗口 / 限速全是**占位值** |
+| `夹持机构`（`auxiliary.c`） | `aux_Step()` 在编排序列第 1 步调用，内含 `rot_Step()`（旋转轴斜坡，无条件推进）与 `grip_Step()`（装载动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()` | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、斜坡速率全为**占位值** |
+| **对准 / 装载 / 回零段**（`nav.c`） | 三个段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME`，在 `nav_SegStep()` 里各自管住超时与重试 | ⚠ `NAV_SEG_ALIGN` 未判转盘是否停稳（现场转盘转动时闭环会追不上）；`NAV_SEG_HOME` 依赖限位开关已接线，且 `lift.homed` 只在 `aux_Init()` 清零 —— **一轮跑完后再次启动导航，装载段会因 `grip_AllLoaded()` 恒真而秒过** |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
@@ -572,8 +577,27 @@ Data[7]     保留填 0
 > **颜色与距离同帧同码**：车对准的同时就把颜色读到了，不需要额外请求；代价是二者无法单独刷新
 > （视觉模块若某一项没识别出来，整帧照发、该项填 0，接收侧不做额外校验）。
 >
-> ⚠ **尚无消费者**：解析结果只进 `vision1Slot`，读它的"对准段 / 装载段"尚未实现
-> （见 §6「未接入模块怎么接进来」）。
+> 消费方是编排层的**对准段** `NAV_SEG_ALIGN`（`nav.c` 的 `nav_AlignCtrl()`），见下节。
+
+### 原料区动作：回零 / 对准 / 装载三个航段（`nav.c`）
+
+原料区那一段（默认路线 ⑥⑦⑧）由**三个新段类型**承载，都是"车停原地、只动机构或只微调底盘"：
+
+| 段类型 | 做什么 | 判完成 | 段超时 |
+| --- | --- | --- | --- |
+| `NAV_SEG_HOME` | 进入本段时若 `lift.homed = 0` 就 `lift_Home()`，之后等反馈 | `lift.homed != 0` | `NAV_HOME_TIMEOUT_MS` |
+| `NAV_SEG_ALIGN` | 读 `vision1_GetSlot()`，`vy = Kp·front`、`vx = −Kp·left`，两轴同时进窗口后停住保持 | 两轴 \|误差\| ≤ `NAV_ALIGN_TOL_MM` 且持续 `NAV_ALIGN_HOLD_MS` | `NAV_ALIGN_TIMEOUT_MS` |
+| `NAV_SEG_LOAD` | 每轮先走一次对准，再 `grip_LoadOnce()`；机构忙就等 | `grip_AllLoaded()`（三轮装满） | `NAV_LOAD_TIMEOUT_MS` |
+
+- **重试框架**：`nav_TryTimeout()` 管单次尝试的时限与重试计数。`ALIGN` 用
+  `NAV_ALIGN_TRY_TIMEOUT_MS` × `NAV_ALIGN_RETRY`；`LOAD` 里对准与抓取**共用** `s_nav.retry`。
+  重试用尽才 `contract_PostEvent(EV_FAULT)` + `nav_Abort()`，收敛到 FAULT，本层不自行复位。
+- **fail-safe**：`vision1Slot.online = 0` 时对准段**不动作**（速度清零，等恢复或超时），
+  与避障同一条铁律 —— 距离不可信就不许据它动底盘。
+- ⚠ `NAV_SEG_LOAD` 的前置条件是 `lift.homed = 1`，故默认路线把 `NAV_SEG_HOME` 排在它前面；
+  `grip_LoadOnce()` 返回 false（状态不符 / 未回零）**不重试，直接判故障**。
+- ⚠ **段超时字段是 `uint32_t`**：一轮装载按当前的 `LIFT_VEL_DEFAULT`（300 RPM = 10 mm/s）估算
+  约 40 s，三轮加对准已超 `uint16_t` 的 65.5 s 上限。抬高升降速度后可以调小这些常量。
 
 ### 视觉模块 2（`vision.c`）：帧格式已定稿，两项内容留空
 
@@ -616,7 +640,7 @@ Data[7]     保留填 0
 | 串口 | USART1（PA9/PA10，DMA2 Stream5） | USART3（PB10/PB11，DMA1 Stream3） | USART2（PA2/PA3，DMA1 Stream5） |
 | 承载内容 | 物块颜色 + 对准相对距离（前后 / 左右） | 障碍物（`0xF3`）+ 任务码（二维码，`0xF4`），视距 50 cm | 控件指令下发 + 触摸 / 变量事件上报 |
 | 协议实现 | `vision.c`（**匿名协议精简帧**，与视觉 2 共用组帧 / 校验） | `vision.c`（**匿名协议精简帧**） | `screen.c`（TJC 协议） |
-| 状态 | 协议已落地**并接入控制环**（`0xF5`，DATA 5 字节）；⚠ 尚无消费者 | 协议已落地，未接入控制环 | 协议已落地，未接入控制环 |
+| 状态 | 协议已落地**并接入控制环**（`0xF5`，DATA 5 字节）；消费方为对准段 | 协议已落地，未接入控制环 | 协议已落地，未接入控制环 |
 
 ### 新机构接入系统要做三件事
 
@@ -631,9 +655,9 @@ Data[7]     保留填 0
 ### 两条红线
 
 1. **`contract_ControlStep()` 不许塞算法。** 它是骨架编排，只负责按顺序调用别人：
-   `chassis_DriveWatchdog()` → `aux_Step()` → `input_Step()` → `chassis_CheckBraking()` → `nav_Step()` →
-   `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
-   新模块的周期处理挂进 `input_Step()` 那一组（即前三个之间），不要改动这个顺序。
+   `chassis_DriveWatchdog()` → `aux_Step()` → `input_Step()` → `vision1_Step()` → `chassis_CheckBraking()` →
+   `nav_Step()` → `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
+   新模块的周期处理挂进 `vision1_Step()` 之前那一组，不要改动这个顺序。
 2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
    状态机永远只认"系统级"的事，机构细节全留在 `auxiliary.c`。
 

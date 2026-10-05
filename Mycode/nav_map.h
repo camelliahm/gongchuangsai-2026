@@ -82,7 +82,6 @@
 #define NAV_MAP_SPEED_DOCK		(150)						//进位段速度(mm/s)
 
 #define NAV_MAP_DWELL_QR_MS		(800)						//读二维码 + 任务码上屏
-#define NAV_MAP_DWELL_GRAB_MS	(3000)						//抓取机构动作（占位，待机构确定）
 #define NAV_MAP_DWELL_PLACE_MS	(3000)						//放置机构动作（占位，待机构确定）
 
 /*---- 默认路线 ----------------------------------------*/
@@ -102,31 +101,35 @@ static const NavSeg_t s_defaultMap[] = {	//地图
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
 	//⑤ 前进 900 → (1200,300)，正对原料区转盘
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },
-	//⑥ 抓取第 1 批 3 个物料（每次 1 个，机构动作占位）
-	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_GRAB_MS, 0, 0 },
-	//⑦ 掉头 180° → 机头朝 +Y（场地底边）
+	//⑥ 升降轴回零（车停原地；homed 是装载的前置条件，本段不可省）
+	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },
+	//⑦ 视觉对准（视觉模块 1）：把夹持中心对到物料中心，可单独重跑
+	{ NAV_SEG_ALIGN,   0, 0, NAV_ALIGN_TIMEOUT_MS },
+	//⑧ 三轮装载：每轮先对准再抓取，装满 GRIP_LOAD_TOTAL 个才离开原料区
+	{ NAV_SEG_LOAD,    0, 0, NAV_LOAD_TIMEOUT_MS },
+	//⑨ 掉头 180° → 机头朝 +Y（场地底边）
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	//⑧ 前进 1800 → (1200,2100)，正对粗加工区
+	//⑩ 前进 1800 → (1200,2100)，正对粗加工区
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_LANE, 0 },
-	//⑨ 按任务码顺序放入粗加工区 1~3 号圆环
+	//⑪ 按任务码顺序放入粗加工区 1~3 号圆环
 	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_PLACE_MS, 0, 0 },
-	//⑩ 掉头 180° → 机头朝 -Y
+	//⑫ 掉头 180° → 机头朝 -Y
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	//⑪ 前进 900 → (1200,1200)，回到十字交点
+	//⑬ 前进 900 → (1200,1200)，回到十字交点
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_CROSS_Y), NAV_MAP_SPEED_LANE, 0 },
-	//⑫ 左转 90° → 机头朝 -X（场地左边）
+	//⑭ 左转 90° → 机头朝 -X（场地左边）
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	//⑬ 前进 900 → (300,1200)，正对暂存区
+	//⑮ 前进 900 → (300,1200)，正对暂存区
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_DOCK, 0 },
-	//⑭ 放入暂存区 1~3 号圆环
+	//⑯ 放入暂存区 1~3 号圆环
 	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_PLACE_MS, 0, 0 },
-	//⑮ 掉头 180° → 机头朝 +X
+	//⑰ 掉头 180° → 机头朝 +X
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	//⑯ 前进 1950 → (2250,1200)，沿横向车道回到右端
+	//⑱ 前进 1950 → (2250,1200)，沿横向车道回到右端
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_LANE, 0 },
-	//⑰ 左转 90° → 机头朝 -Y
+	//⑲ 左转 90° → 机头朝 -Y
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	//⑱ 前进 1050 → (2250,150)，回到启停区 1
+	//⑳ 前进 1050 → (2250,150)，回到启停区 1
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_DOCK, 0 },
 	{ NAV_SEG_END,     0, 0, 0 },
 };
