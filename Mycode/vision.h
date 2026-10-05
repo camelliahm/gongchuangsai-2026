@@ -58,11 +58,6 @@ const Vision1Slot_t *vision1_GetSlot(void);
 #define VISION_TASK_CODE_MAX	(16u)		//任务码 ASCII 原文上限；当前 4 组共 12 位
 #define VISION_RANGE_MM			(500)		//有效识别距离(mm)，实测 50 cm；0 = 未知（哨兵）
 
-//视场角(度) / 安装高度(mm) / 安装俯角(度)：⚠ 均留空，影响障碍物反投影与盲区判定
-#define VISION_FOV_DEG			(0.0f)		//视场角：⚠ 留空，0 = 未知
-#define VISION_MOUNT_H_MM		(0.0f)		//安装高度：⚠ 留空，0 = 未知
-#define VISION_MOUNT_PITCH_DEG	(0.0f)		//安装俯角：⚠ 留空，0 = 未知
-
 //障碍物：车体坐标；⚠ 字段全是待定值，避障层实现前不得使用
 typedef struct {
 	int16_t x;				//障碍中心横向(车体坐标, mm)：⚠ 待定

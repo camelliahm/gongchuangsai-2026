@@ -56,7 +56,11 @@ typedef enum {
 
 /*---- 装载段（NAV_SEG_LOAD）----*/
 #define NAV_LOAD_RETRY			(2u)		//装载失败后的重试次数（与段内对准共用该计数）
-#define NAV_LOAD_TIMEOUT_MS		(180000u)	//装载段的段超时(ms)：须覆盖三轮动作与全部重试  ⚠ 占位值
+#define NAV_LOAD_TIMEOUT_MS		(240000u)	//装载段的段超时(ms)：须覆盖三轮"等色 + 对准 + 动作"与全部重试  ⚠ 占位值
+
+/*---- 挑色（装载段每轮的前置）：等本轮目标色转到取料点 ----*/
+#define NAV_COLOR_HOLD_FRAMES	(3u)		//同色需连续通过的帧数，确认转盘已停稳  ⚠ 占位值
+#define NAV_COLOR_TIMEOUT_MS	(25000u)	//单轮等色的上限(ms)：无任务码 / 目标色迟迟不出现即判故障
 
 /*---- 回零段（NAV_SEG_HOME）----*/
 #define NAV_HOME_TIMEOUT_MS		(20000u)	//回零段的段超时(ms)：aux 侧的 15s 通常先投 EV_FAULT

@@ -494,9 +494,9 @@ Data[7]     保留填 0
 | --- | --- | --- |
 | `nav`（编排层） | `nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门**之前**调用；启动由 `contract_OnEnter(CHS_RUNNING)` 里的 `nav_Start()` 触发；姿态环给定经黑板 `chassis.yawTarget` 传递 | **里程计标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号）与**姿态环 PID 参数**——仍是占位值 |
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
-| `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav.c` 的 `nav_AlignStep()` → `nav_AlignCtrl()`），但 `NAV_ALIGN_KP` / 窗口 / 限速全是**占位值** |
+| `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
 | `夹持机构`（`auxiliary.c`） | `aux_Step()` 在编排序列第 1 步调用，内含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_Step()`（装载动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
-| **对准 / 装载 / 回零段**（`nav.c`） | 三个段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME`，在 `nav_SegStep()` 里各自管住超时与重试 | ⚠ `NAV_SEG_ALIGN` 未判转盘是否停稳（现场转盘转动时闭环会追不上）；`NAV_SEG_HOME` 依赖限位开关已接线，且 `lift.homed` 只在 `aux_Init()` 清零 —— **一轮跑完后再次启动导航，装载段会因 `grip_AllLoaded()` 恒真而秒过** |
+| **对准 / 装载 / 回零段**（`nav.c`） | 三个段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME`，在 `nav_SegStep()` 里各自管住超时与重试 | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据依赖视觉模块 2 的任务码（取不到即判故障） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
@@ -543,7 +543,7 @@ Data[7]     保留填 0
 > **颜色与距离同帧同码**：车对准的同时就把颜色读到了，不需要额外请求；代价是二者无法单独刷新
 > （视觉模块若某一项没识别出来，整帧照发、该项填 0，接收侧不做额外校验）。
 >
-> 消费方是编排层的**对准段** `NAV_SEG_ALIGN`（`nav.c` 的 `nav_AlignCtrl()`），见下节。
+> 消费方是编排层的**对准段**（`NAV_SEG_ALIGN`）与**装载段的挑色步**（`NAV_SEG_LOAD` 每轮先比 `color` 与任务码目标色），见下节。
 
 ### 原料区动作：回零 / 对准 / 装载三个航段（`nav.c`）
 
@@ -553,7 +553,7 @@ Data[7]     保留填 0
 | --- | --- | --- | --- |
 | `NAV_SEG_HOME` | 进入本段时若 `lift.homed = 0` 就 `lift_Home()`，之后等反馈 | `lift.homed != 0` | `NAV_HOME_TIMEOUT_MS` |
 | `NAV_SEG_ALIGN` | 读 `vision1_GetSlot()`，`vy = Kp·front`、`vx = −Kp·left`，两轴同时进窗口后停住保持 | 两轴 \|误差\| ≤ `NAV_ALIGN_TOL_MM` 且持续 `NAV_ALIGN_HOLD_MS` | `NAV_ALIGN_TIMEOUT_MS` |
-| `NAV_SEG_LOAD` | 段入口取任务码顺序并清装载计数；每轮先对准，再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
+| `NAV_SEG_LOAD` | 段入口取任务码顺序并清装载计数；每轮**先等本轮目标色**（`nav_ColorWait()`：原地泊住，同色连续 `NAV_COLOR_HOLD_FRAMES` 帧算停稳）→ 再对准 → 再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
 
 - **重试框架**：`nav_TryTimeout()` 管单次尝试的时限与重试计数。`ALIGN` 用
   `NAV_ALIGN_TRY_TIMEOUT_MS` × `NAV_ALIGN_RETRY`；`LOAD` 里对准与抓取**共用** `s_nav.retry`。
@@ -566,10 +566,12 @@ Data[7]     保留填 0
   本段会**秒过**。清零在段入口做，不在 `aux_Init()` —— 后者一次上电只执行一次。
 - **物料盘与夹持轴并行**：进入落盘旋转阶段时两轴同时起斜坡（各自按 `GRIP_*_SLEW_DEG`），
   下降到放料高度前要求**两轴都到位**。第 k 轮的目标槽位 = 已装轮数 + 1（顺序 1 → 位置一 = 0°）。
-- ⚠ 当前假设"**抓取顺序 = 任务码顺序**"：槽位跟着轮次走，还没有"这一轮抓到的颜色是不是任务码
-  要的那个"的判据（视觉1 的 `color` 字段尚未消费）。颜色不符时不会跳过或重抓。
+- **挑色抓取（颜色策略 B1）**：转盘会停但**停位随机**，不能保证首次停的就是任务码要的第一个颜色 ——
+  故每轮**先等目标色**（`order[loadCount]`）转到取料点、连续若干帧同色确认停稳，再对准抓取。
+  等色期间车原地泊住（`vx/vy = 0`），颜色不可信（`online = 0` 或 `color = 0`）时同样不动作。
+  **槽位仍由轮次决定**（`loadCount + 1`），**不是**按颜色查表。无任务码（`orderGot = 0`）时本段判故障。
 - ⚠ **段超时字段是 `uint32_t`**：一轮装载按当前的 `LIFT_VEL_DEFAULT`（300 RPM = 10 mm/s）估算
-  约 40 s，三轮加对准已超 `uint16_t` 的 65.5 s 上限。抬高升降速度后可以调小这些常量。
+  约 40 s，三轮"等色 + 对准 + 动作"已远超 `uint16_t` 的 65.5 s 上限（现给 240 s）。抬高升降速度后可以调小这些常量。
 
 ### 视觉模块 2（`vision.c`）：任务码已接入，避障内容仍留空
 
@@ -595,7 +597,6 @@ Data[7]     保留填 0
 | 留空项 | 位置 | 现状 | 填写时机 |
 | --- | --- | --- | --- |
 | **避障帧（`0xF3`）的数据内容** | `VisionObst_t` / `VISION_OBST_MAX` | 收到即计帧数，**不解析**，故 `obstFresh` 恒为 0 | 避障帧字段量纲确定后 |
-| **视场角 / 安装姿态** | `VISION_FOV_DEG` / `VISION_MOUNT_H_MM` / `VISION_MOUNT_PITCH_DEG` | `0` = 未标定 | 实测后 |
 
 **视距已实测**：`VISION_RANGE_MM = 500`（50 cm）。车速上限由它反推 ——
 `净空 = 车速×总延迟 + 车速²/(2×减速度) + 车体半径 + 障碍半径`。

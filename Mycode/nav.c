@@ -33,6 +33,9 @@ static struct {
 	//对准 / 装载段
 	uint8_t			alignHold;		//已居中的连续周期数（保持判据）
 	uint8_t			loadAligned;	//1 = 本轮装载已对准，可以进行抓取
+	uint8_t			loadColored;	//1 = 本轮已等到目标色（等色步完成）
+	uint8_t			colorHold;		//同色连续帧数（等色判据）
+	uint16_t		rxSeen;			//上一帧的 vision1Slot.rxCnt，用于逐帧计数
 	uint8_t			retry;			//本段已重试次数（对准与抓取共用该计数）
 	uint32_t		tryTick;		//本次尝试开始的 tick；重试时重置
 
@@ -226,7 +229,70 @@ static void nav_TaskOrder(void)
 }
 
 /**
- * @brief  装载段：每轮先对准再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
+ * @brief  本轮的目标颜色：任务码第 1 组里第 (已完成轮数 + 1) 位
+ * @retval 颜色代号 1~6；未取到任务码或序号越界时返回 VISION1_COLOR_NONE
+ * @note   槽位与轮次同序，故目标色直接取 order[loadCount]，不需按色查表
+ * @author camelliahm
+ */
+static uint8_t nav_TargetColor(void)
+{
+	if ((s_nav.orderGot == 0u) || (grip.loadCount >= (uint8_t)GRIP_TRAY_POS_NUM))
+	{
+		return (uint8_t)VISION1_COLOR_NONE;
+	}
+
+	return s_nav.order[grip.loadCount];
+}
+
+/**
+ * @brief  等色步：原地等本轮目标色转到取料点，同色连续 NAV_COLOR_HOLD_FRAMES 帧算停稳
+ * @retval 1 = 目标色已稳定停住；0 = 仍在等（或已判故障）
+ * @note   转盘停位随机，不能保证首次停的就是目标色，故先等色再对准抓取；
+ *         等色期间车原地泊住（转盘在换料，追没有意义），颜色不可信时同样不动作；
+ *         任务码可能晚到，本步会补解析一次；超时用尽即判故障
+ * @author camelliahm
+ */
+static uint8_t nav_ColorWait(void)
+{
+	const Vision1Slot_t *vs = vision1_GetSlot();
+	uint8_t target;
+
+	//等色期间车停住：转盘在换料，底盘不必动作
+	chassis.vx = 0;
+	chassis.vy = 0;
+
+	if (s_nav.orderGot == 0u)
+	{
+		nav_TaskOrder();		//段入口没取到任务码：这里再试一次
+	}
+
+	if (nav_TryTimeout(NAV_COLOR_TIMEOUT_MS, 0u) == 2u)
+	{
+		nav_Fault();
+		return 0u;
+	}
+
+	target = nav_TargetColor();
+
+	//以视觉帧为节拍：没有新帧不重复计数，避免同一帧被算成多次
+	if (vs->rxCnt == s_nav.rxSeen)
+	{
+		return 0u;
+	}
+	s_nav.rxSeen = vs->rxCnt;
+
+	if ((vs->online == 0u) || (vs->color == VISION1_COLOR_NONE) || (vs->color != target))
+	{
+		s_nav.colorHold = 0u;
+		return 0u;
+	}
+
+	s_nav.colorHold++;
+	return (s_nav.colorHold >= NAV_COLOR_HOLD_FRAMES) ? 1u : 0u;
+}
+
+/**
+ * @brief  装载段：每轮先等目标色、再对准、再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
  * @retval 1 = 三轮装满；0 = 进行中或已判故障
  * @note   机构空闲时才发起下一轮，抓取失败按 NAV_LOAD_RETRY 重发（grip_LoadOnce 会清故障位）；
  *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接判故障
@@ -251,6 +317,20 @@ static uint8_t nav_LoadStep(void)
 		return 0u;
 	}
 
+	//第 1 步：等本轮目标色（挑色抓取：转盘停位随机，先等到目标色再动手）
+	if (s_nav.loadColored == 0u)
+	{
+		if (nav_ColorWait() == 0u)
+		{
+			return 0u;
+		}
+
+		s_nav.loadColored = 1u;
+		s_nav.alignHold   = 0u;
+		s_nav.tryTick     = xTaskGetTickCount();	//对准计时从本轮重新起算
+	}
+
+	//第 2 步：视觉闭环对准
 	if (s_nav.loadAligned == 0u)
 	{
 		t = nav_TryTimeout(NAV_ALIGN_TRY_TIMEOUT_MS, NAV_ALIGN_RETRY);
@@ -273,6 +353,7 @@ static uint8_t nav_LoadStep(void)
 		s_nav.loadAligned = 1u;
 	}
 
+	//第 3 步：发起一轮抓取
 	if (grip.fault != 0u)		//上一轮失败：计数后重发，重试用尽才判故障
 	{
 		if (s_nav.retry >= NAV_LOAD_RETRY)
@@ -289,7 +370,9 @@ static uint8_t nav_LoadStep(void)
 		return 0u;
 	}
 
-	s_nav.loadAligned = 0u;		//下一轮回到对准步
+	//下一轮回到等色步
+	s_nav.loadColored = 0u;
+	s_nav.loadAligned = 0u;
 	s_nav.tryTick     = xTaskGetTickCount();
 	return 0u;
 }
@@ -317,11 +400,14 @@ static void nav_SegStart(void)
 	s_nav.hold     = 0u;
 	s_nav.segTick  = now;
 
-	//本段的重试与居中判据都从零开始，段间不继承
+	//本段的重试与判据都从零开始，段间不继承
 	s_nav.tryTick     = now;
 	s_nav.retry       = 0u;
 	s_nav.alignHold   = 0u;
 	s_nav.loadAligned = 0u;
+	s_nav.loadColored = 0u;
+	s_nav.colorHold   = 0u;
+	s_nav.rxSeen      = vision1_GetSlot()->rxCnt;	//以当前帧为基准，免把旧帧当本轮新帧
 
 	//装载的前置条件是升降轴已回零，故进入回零段时触发一次（完成由 aux 侧置 homed）
 	if ((seg->type == NAV_SEG_HOME) && (lift.homed == 0u))
@@ -506,6 +592,9 @@ void nav_Init(void)
 
 	s_nav.alignHold   = 0u;
 	s_nav.loadAligned = 0u;
+	s_nav.loadColored = 0u;
+	s_nav.colorHold   = 0u;
+	s_nav.rxSeen      = 0u;
 	s_nav.retry       = 0u;
 	s_nav.tryTick     = 0u;
 
