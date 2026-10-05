@@ -157,6 +157,7 @@ static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
 	(void)f;
 
+#if CFG_HOST_CAN_ENABLED
 	switch (cmd)
 	{
 	case CMD_ENABLE:      contract_PostEvent(EV_ENABLE, 0);      return true;
@@ -167,6 +168,9 @@ static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 	case CMD_CLEAR_FAULT: contract_PostEvent(EV_CLEAR_FAULT, 0); return true;
 	default:                                                    return false;
 	}
+#else
+	return false;		//无上位机：系统段无属主
+#endif
 }
 
 /**
@@ -177,6 +181,7 @@ static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
  */
 static bool contract_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
+#if CFG_HOST_CAN_ENABLED
 	int16_t vx;
 	int16_t vy;
 	int16_t w;
@@ -203,6 +208,12 @@ static bool contract_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 	}
 
 	return true;
+#else
+	(void)cmd;
+	(void)f;
+
+	return false;		//无上位机：底盘段无属主，速度只由 nav 产生
+#endif
 }
 
 /*---- 消息路由表：按"码 & mask"查表派发；新增模块加一行 ----*/

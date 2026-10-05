@@ -553,7 +553,7 @@ Data[7]     保留填 0
 | --- | --- | --- | --- |
 | `NAV_SEG_HOME` | 进入本段时若 `lift.homed = 0` 就 `lift_Home()`，之后等反馈 | `lift.homed != 0` | `NAV_HOME_TIMEOUT_MS` |
 | `NAV_SEG_ALIGN` | 读 `vision1_GetSlot()`，`vy = Kp·front`、`vx = −Kp·left`，两轴同时进窗口后停住保持 | 两轴 \|误差\| ≤ `NAV_ALIGN_TOL_MM` 且持续 `NAV_ALIGN_HOLD_MS` | `NAV_ALIGN_TIMEOUT_MS` |
-| `NAV_SEG_LOAD` | 段入口取任务码顺序并清装载计数；每轮**先等本轮目标色**（`nav_ColorWait()`：原地泊住，同色连续 `NAV_COLOR_HOLD_FRAMES` 帧算停稳）→ 再对准 → 再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
+| `NAV_SEG_LOAD` | 段入口取任务码顺序并清装载计数；每轮**先等本轮目标色**（`nav_ColorWait()`：原地泊住，同色连续 `NAV_COLOR_HOLD_FRAMES` 帧算停稳）→ 再对准 → **抓取前复查颜色**（`nav_ColorMatched()`，不符退回等色步重来）→ 再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
 
 - **重试框架**：`nav_TryTimeout()` 管单次尝试的时限与重试计数。`ALIGN` 用
   `NAV_ALIGN_TRY_TIMEOUT_MS` × `NAV_ALIGN_RETRY`；`LOAD` 里对准与抓取**共用** `s_nav.retry`。
@@ -570,6 +570,10 @@ Data[7]     保留填 0
   故每轮**先等目标色**（`order[loadCount]`）转到取料点、连续若干帧同色确认停稳，再对准抓取。
   等色期间车原地泊住（`vx/vy = 0`），颜色不可信（`online = 0` 或 `color = 0`）时同样不动作。
   **槽位仍由轮次决定**（`loadCount + 1`），**不是**按颜色查表。无任务码（`orderGot = 0`）时本段判故障。
+- **抓取前复查颜色**（`nav_ColorMatched()`）：等色判据是"对准之前"的快照，而对准本身要耗时，
+  期间转盘可能又转过一颗 —— 那时对准收敛到的已不是目标色物料。故在 `grip_LoadOnce()` 之前
+  按当前帧再比一次颜色，不符就复位 `loadColored` / `loadAligned` / `retry` 与 `tryTick`，退回等色步重来。
+  复查只取**当前帧**，判据同样是"在线且颜色等于目标色"；长期对不上由 `NAV_COLOR_TIMEOUT_MS` 与段超时兜底。
 - ⚠ **段超时字段是 `uint32_t`**：一轮装载按当前的 `LIFT_VEL_DEFAULT`（300 RPM = 10 mm/s）估算
   约 40 s，三轮"等色 + 对准 + 动作"已远超 `uint16_t` 的 65.5 s 上限（现给 240 s）。抬高升降速度后可以调小这些常量。
 

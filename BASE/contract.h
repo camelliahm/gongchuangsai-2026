@@ -6,6 +6,13 @@
 
 //公共契约层：地址宏 / 消息码 / 状态与事件枚举 / Chassis_t / 任务参数 / 对外接口，详见 README.md
 
+/*---- 功能开关 ----*/
+//1 = 有上位机，CAN 指令层生效；0 = 无上位机，指令层不生效（纯自治）
+//只闸指令解析（SysCmd / DriveCmd / aux_HandleCmd），反馈接收与各模块周期任务不受影响
+#ifndef CFG_HOST_CAN_ENABLED
+#define CFG_HOST_CAN_ENABLED	(0)		//是否启用上位机 CAN 指令层
+#endif
+
 /*---- 地址分配（ZDT 帧：ExtId[28:8] = 地址，ExtId[7:0] = 包序号）----*/
 //0x01~0x04 四轮 / 0x05 升降轴 / 0xFE 本机；0x00 是 ZDT 广播地址，禁止占用。全表见 README.md
 #define CHASSIS_ADDR_HOST			(0xFEu)		//本机（上位机）地址

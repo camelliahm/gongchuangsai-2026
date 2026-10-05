@@ -670,6 +670,7 @@ bool grip_AllLoaded(void)
 
 /*---- 消息分发（只处理"受消息控制"的机构）----*/
 
+#if CFG_HOST_CAN_ENABLED
 /**
  * @brief  夹持机构的非安全指令是否被当前状态接受
  * @retval true = READY / RUNNING（已使能且不在故障）
@@ -679,6 +680,7 @@ static bool aux_GripAllowed(void)
 {
 	return ((chassis.state == CHS_READY) || (chassis.state == CHS_RUNNING));
 }
+#endif
 
 /**
  * @brief  尝试把一条消息按"辅助机构"处理
@@ -692,6 +694,7 @@ static bool aux_GripAllowed(void)
  */
 bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
+#if CFG_HOST_CAN_ENABLED
 	uint16_t vel;
 	uint8_t  acc;
 	int32_t  delta;
@@ -819,6 +822,12 @@ bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 	}
 
 	return true;
+#else
+	(void)cmd;
+	(void)f;
+
+	return false;	//无上位机：升降轴 / 夹持机构段无属主，动作只由编排层直接调用
+#endif
 }
 
 /**

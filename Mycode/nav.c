@@ -292,10 +292,30 @@ static uint8_t nav_ColorWait(void)
 }
 
 /**
- * @brief  装载段：每轮先等目标色、再对准、再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
+ * @brief  抓取前的颜色复查：此刻视野里的物料是不是本轮目标色
+ * @retval 1 = 在线且颜色等于目标色；0 = 颜色不符或不可信
+ * @note   等色判据是"对准之前"的快照，对准耗时期间转盘可能又转过一颗，
+ *         那时对准收敛到的已不是目标色物料，故动手前按当前帧复查一次
+ * @author camelliahm
+ */
+static uint8_t nav_ColorMatched(void)
+{
+	const Vision1Slot_t *vs = vision1_GetSlot();
+
+	if ((vs->online == 0u) || (vs->color == VISION1_COLOR_NONE))
+	{
+		return 0u;
+	}
+
+	return (vs->color == nav_TargetColor()) ? 1u : 0u;
+}
+
+/**
+ * @brief  装载段：每轮先等目标色、再对准、抓取前复查颜色、再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
  * @retval 1 = 三轮装满；0 = 进行中或已判故障
  * @note   机构空闲时才发起下一轮，抓取失败按 NAV_LOAD_RETRY 重发（grip_LoadOnce 会清故障位）；
- *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接判故障
+ *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接判故障；
+ *         复查不符则退回等色步重来（本轮时限与重试都重算），长期卡住由段超时兜底
  * @author camelliahm
  */
 static uint8_t nav_LoadStep(void)
@@ -353,7 +373,17 @@ static uint8_t nav_LoadStep(void)
 		s_nav.loadAligned = 1u;
 	}
 
-	//第 3 步：发起一轮抓取
+	//第 3 步：抓取前复查颜色 —— 对准耗时期间转盘可能又转过一颗，不符就退回等色重来
+	if (nav_ColorMatched() == 0u)
+	{
+		s_nav.loadColored = 0u;
+		s_nav.loadAligned = 0u;
+		s_nav.retry       = 0u;		//本轮重新开始：等色与对准的时限都重算
+		s_nav.tryTick     = xTaskGetTickCount();
+		return 0u;
+	}
+
+	//第 4 步：发起一轮抓取
 	if (grip.fault != 0u)		//上一轮失败：计数后重发，重试用尽才判故障
 	{
 		if (s_nav.retry >= NAV_LOAD_RETRY)
