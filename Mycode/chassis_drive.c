@@ -4,19 +4,19 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* 静态存储期变量由启动代码清零；初值在 contract_Init() 中显式赋值 */
-__IO ChassisDrive_t chassisDrive;
-__IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];
+//静态存储期变量由启动代码清零；初值在 contract_Init() 中显式赋值
+__IO ChassisDrive_t chassisDrive;		//底盘里程计与运动学状态
+__IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];	//四台电机的反馈槽位
 
 /*---- 姿态环 PID 实例 ----*/
-/* 四轮闭环在驱动器内部完成，MCU 只做底盘级姿态修正：yaw 误差叠加到 w */
-/* ⚠ 调度器启动前不调用 PID_Calculate()，避免 xTaskGetTickCount() 未就绪 */
-static PID_TypeDef s_yawPid;
+//四轮闭环在驱动器内部完成，MCU 只做底盘级姿态修正：yaw 误差叠加到 w
+//⚠ 调度器启动前不调用 PID_Calculate()，避免 xTaskGetTickCount() 未就绪
+static PID_TypeDef s_yawPid;			//航向姿态环 PID 实例
 
-#define YAW_PID_KP			(2.0f)
-#define YAW_PID_KI			(0.0f)
-#define YAW_PID_KD			(0.0f)
-#define YAW_PID_OUT_MAX		(200.0f)	/* 姿态修正量上限(0.1度/s 单位) */
+#define YAW_PID_KP			(2.0f)		//姿态环比例增益
+#define YAW_PID_KI			(0.0f)		//姿态环积分增益（当前未启用）
+#define YAW_PID_KD			(0.0f)		//姿态环微分增益（当前未启用）
+#define YAW_PID_OUT_MAX		(200.0f)	//姿态修正量上限(0.1度/s 单位)
 
 /*---- 内部换算 ----*/
 
@@ -32,7 +32,7 @@ static int16_t chassis_VelToRpm(float v_mm_s)
 	float circumference = 3.14159265f * CHASSIS_WHEEL_DIAMETER_MM;
 	float rpm           = (v_mm_s / circumference) * 60.0f * CHASSIS_GEAR_RATIO;
 
-	/* 限幅：防止逆解算出的极端值打爆电机 */
+	//限幅：防止逆解算出的极端值打爆电机
 	if (rpm >  (float)CHASSIS_DRIVE_VEL_MAX_RPM) { rpm =  (float)CHASSIS_DRIVE_VEL_MAX_RPM; }
 	if (rpm < -(float)CHASSIS_DRIVE_VEL_MAX_RPM) { rpm = -(float)CHASSIS_DRIVE_VEL_MAX_RPM; }
 
@@ -181,14 +181,14 @@ void chassis_HandleFeedback(uint8_t idx, const CAN_Frame_t *f)
 
 	switch (f->Data[0])
 	{
-	case 0x35:	/* S_VEL 实时转速 */
+	case 0x35:	//S_VEL 实时转速
 		if (f->DLC >= 3)
 		{
 			m->vel = (int16_t)(((uint16_t)f->Data[1] << 8) | (uint16_t)f->Data[2]);
 		}
 		break;
 
-	case 0x36:	/* S_CPOS 实时位置 */
+	case 0x36:	//S_CPOS 实时位置
 		if (f->DLC >= 5)
 		{
 			m->pos = (int32_t)(((uint32_t)f->Data[1] << 24) |
@@ -198,7 +198,7 @@ void chassis_HandleFeedback(uint8_t idx, const CAN_Frame_t *f)
 		}
 		break;
 
-	case 0x3A:	/* S_FLAG 状态标志位 */
+	case 0x3A:	//S_FLAG 状态标志位
 		if (f->DLC >= 2)
 		{
 			m->flag = f->Data[1];
@@ -238,7 +238,7 @@ void chassis_DriveWatchdog(void)
 		{
 			if (chassisMotor[i].online)
 			{
-				lost++;		/* 本周期刚从在线变掉线 */
+				lost++;		//本周期刚从在线变掉线
 			}
 			chassisMotor[i].online = 0;
 		}
@@ -248,7 +248,7 @@ void chassis_DriveWatchdog(void)
 		}
 	}
 
-	/* 只在跳变沿投递；已掉线状态下无需重复投递 */
+	//只在跳变沿投递；已掉线状态下无需重复投递
 	if (lost > 0)
 	{
 		contract_PostEvent(EV_FAULT, lost);
@@ -263,7 +263,7 @@ void chassis_DriveWatchdog(void)
  */
 void chassis_CheckBraking(void)
 {
-	static uint32_t holdMs = 0;
+	static uint32_t holdMs = 0;	//停稳计时(ms)（静态，跨周期保留）
 	uint8_t  i;
 	uint8_t  moving = 0;
 	int16_t  v;
@@ -327,7 +327,7 @@ static void chassis_UpdateOdom(void)
 	float x2;
 	uint8_t i;
 
-	/* 各轮本周期位移(mm) = 线速度(mm/s) × 周期(s) */
+	//各轮本周期位移(mm) = 线速度(mm/s) × 周期(s)
 	for (i = 0; i < CHASSIS_MOTOR_NUM; i++)
 	{
 		d[i] = chassis_RpmToVel(chassisMotor[i].vel) * ((float)CHASSIS_CTRL_PERIOD_MS / 1000.0f);
@@ -340,7 +340,7 @@ static void chassis_UpdateOdom(void)
 	dy = (d[0] + d[1] + d[2] + d[3]) * 0.25f;
 	dx = (d[1] + d[2] - d[0] - d[3]) * 0.25f;
 
-	/* 偏航：左右两侧速度差 / 轮距 → 角度增量(度) */
+	//偏航：左右两侧速度差 / 轮距 → 角度增量(度)
 	vLeft  = (d[0] + d[2]) * 0.5f;
 	vRight = (d[1] + d[3]) * 0.5f;
 	dyaw   = ((vRight - vLeft) / CHASSIS_TRACK_WIDTH_MM) * (180.0f / 3.14159265f);
@@ -350,8 +350,8 @@ static void chassis_UpdateOdom(void)
 	 * ⚠ 泰勒展开只在 |角| 小时准确，故这里取归一化副本 odomYaw 而非常量累加的 odomYawCont。 */
 	yawRad = chassisDrive.odomYaw * 3.14159265f / 180.0f;
 	x2     = yawRad * yawRad;
-	s      = yawRad * (1.0f - x2 / 6.0f + x2 * x2 / 120.0f);	/* sin 近似 */
-	c      = 1.0f - x2 / 2.0f + x2 * x2 / 24.0f;				/* cos 近似 */
+	s      = yawRad * (1.0f - x2 / 6.0f + x2 * x2 / 120.0f);	//sin 近似
+	c      = 1.0f - x2 / 2.0f + x2 * x2 / 24.0f;				//cos 近似
 
 	chassisDrive.odomX += dx * c - dy * s;
 	chassisDrive.odomY += dx * s + dy * c;
@@ -360,7 +360,7 @@ static void chassis_UpdateOdom(void)
 	 * 的误差才有意义（否则 179°→-180° 会算出几百度的假误差） */
 	chassisDrive.odomYawCont += dyaw;
 
-	/* 归一化副本：内部三角函数近似与对外显示用 */
+	//归一化副本：内部三角函数近似与对外显示用
 	chassisDrive.odomYaw = chassisDrive.odomYawCont;
 	while (chassisDrive.odomYaw >  180.0f) { chassisDrive.odomYaw -= 360.0f; }
 	while (chassisDrive.odomYaw < -180.0f) { chassisDrive.odomYaw += 360.0f; }
@@ -384,13 +384,13 @@ static void chassis_InverseKinematics(int16_t vx, int16_t vy, int16_t w)
 
 	lxly = CHASSIS_LX_MM + CHASSIS_LY_MM;
 
-	/* 0.1度/s → rad/s，再 × 半径和 → 轮子线速度(mm/s) */
+	//0.1度/s → rad/s，再 × 半径和 → 轮子线速度(mm/s)
 	wz = ((float)w / 10.0f) * (3.14159265f / 180.0f) * lxly;
 
-	v[0] = (float)vy + (float)vx - wz;	/* 左前 */
-	v[1] = (float)vy - (float)vx + wz;	/* 右前 */
-	v[2] = (float)vy - (float)vx - wz;	/* 左后 */
-	v[3] = (float)vy + (float)vx + wz;	/* 右后 */
+	v[0] = (float)vy + (float)vx - wz;	//左前
+	v[1] = (float)vy - (float)vx + wz;	//右前
+	v[2] = (float)vy - (float)vx - wz;	//左后
+	v[3] = (float)vy + (float)vx + wz;	//右后
 
 	for (i = 0; i < CHASSIS_MOTOR_NUM; i++)
 	{
@@ -445,20 +445,20 @@ void chassis_DriveStep(void)
 	float yawFix;
 	int16_t wCmd;
 
-	/* 1. 里程计：由四轮反馈推算当前位姿 */
+	//1. 里程计：由四轮反馈推算当前位姿
 	chassis_UpdateOdom();
 
 	/* 2. 姿态环：给定航向由编排层写在黑板（chassis.yawTarget），误差在
 	 *    连续航向域上计算，跨 ±180 不会算出整圈的假误差。
 	 *    PID_Calculate 按 Err = target - measure 计算 */
 	yawFix = PID_Calculate(&s_yawPid, chassisDrive.odomYawCont, chassis.yawTarget);
-	/* 3. 姿态修正量叠加到角速度指令上（限幅，防止修正量盖过用户指令） */
+	//3. 姿态修正量叠加到角速度指令上（限幅，防止修正量盖过用户指令）
 	if (yawFix >  YAW_PID_OUT_MAX) { yawFix =  YAW_PID_OUT_MAX; }
 	if (yawFix < -YAW_PID_OUT_MAX) { yawFix = -YAW_PID_OUT_MAX; }
 
 	wCmd = (int16_t)((float)chassis.w + yawFix);
 
-	/* 4. 麦轮逆解 + 下发 */
+	//4. 麦轮逆解 + 下发
 	chassis_InverseKinematics(chassis.vx, chassis.vy, wCmd);
 	chassis_SendWheelVel();
 }
@@ -494,11 +494,11 @@ void chassis_DriveInit(void)
 	 * ⚠ 该库无控制周期无关性，改 CHASSIS_CTRL_PERIOD_MS 必须重新整定 */
 	PID_Init(&s_yawPid,
 			 (uint16_t)YAW_PID_OUT_MAX,
-			 (uint16_t)(YAW_PID_OUT_MAX * 0.2f),	/* 积分限幅取输出的 20% */
-			 0.1f,									/* 死区：误差 <0.1° 不调节，抑制抖动 */
+			 (uint16_t)(YAW_PID_OUT_MAX * 0.2f),	//积分限幅取输出的 20%
+			 0.1f,									//死区：误差 <0.1° 不调节，抑制抖动
 			 YAW_PID_KP, YAW_PID_KI, YAW_PID_KD,
-			 0.0f, 0.0f,							/* 变速积分 A/B，本环未启用 */
-			 1.0f,									/* 输出滤波系数 1.0 = 不滤波 */
-			 0.5f,									/* 微分滤波系数 */
+			 0.0f, 0.0f,							//变速积分 A/B，本环未启用
+			 1.0f,									//输出滤波系数 1.0 = 不滤波
+			 0.5f,									//微分滤波系数
 			 (uint8_t)(Integral_Limit | Derivative_On_Measurement | DerivativeFilter));
 }

@@ -1,34 +1,27 @@
 #include "input.h"
-#include "screen.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
 /*---- 通道硬件资源 ------------------------------------------------*/
-static USART_TypeDef *const       s_usart[INPUT_NUM]  = { USART1,       USART3,       USART2       };
-static DMA_Stream_TypeDef *const  s_stream[INPUT_NUM] = { DMA2_Stream5, DMA1_Stream3, DMA1_Stream5 };
-static const uint32_t             s_chan[INPUT_NUM]   = { DMA_Channel_4, DMA_Channel_4, DMA_Channel_4 };
-static const IRQn_Type            s_irqn[INPUT_NUM]   = { USART1_IRQn,   USART3_IRQn,   USART2_IRQn  };
+static USART_TypeDef *const       s_usart[INPUT_NUM]  = { USART1,       USART3,       USART2       };	//各通道串口
+static DMA_Stream_TypeDef *const  s_stream[INPUT_NUM] = { DMA2_Stream5, DMA1_Stream3, DMA1_Stream5 };	//各通道 DMA 流
+static const uint32_t             s_chan[INPUT_NUM]   = { DMA_Channel_4, DMA_Channel_4, DMA_Channel_4 };	//各通道 DMA 请求
+static const IRQn_Type            s_irqn[INPUT_NUM]   = { USART1_IRQn,   USART3_IRQn,   USART2_IRQn  };	//各通道中断号
 
-#define INPUT_RING_MASK		(INPUT_RING_SIZE - 1u)	/* INPUT_RING_SIZE 必须是 2 的幂 */
+#define INPUT_RING_MASK		(INPUT_RING_SIZE - 1u)	//环形缓冲下标掩码；INPUT_RING_SIZE 必须是 2 的幂
 
-/* DMA 目标缓冲（4 字节对齐） */
-__align(4) static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF];
+//DMA 目标缓冲（4 字节对齐）
+__align(4) static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF];	//每通道一块，DMA 直接写入
 
-/* 环形缓冲：head 在中断里写，tail 在任务里读，单生产者/单消费者 */
-static uint8_t  s_ring[INPUT_NUM][INPUT_RING_SIZE];
-static volatile uint16_t s_head[INPUT_NUM];
-static volatile uint16_t s_tail[INPUT_NUM];
-static volatile uint16_t s_drop[INPUT_NUM];	/* 环满丢弃的字节数 */
-static volatile uint16_t s_byte[INPUT_NUM];	/* 累计到达字节数 */
+//环形缓冲：head 在中断里写，tail 在任务里读，单生产者/单消费者
+static uint8_t  s_ring[INPUT_NUM][INPUT_RING_SIZE];	//每通道环形缓冲
+static volatile uint16_t s_head[INPUT_NUM];			//环形缓冲写指针（中断侧）
+static volatile uint16_t s_tail[INPUT_NUM];			//环形缓冲读指针（任务侧）
+static volatile uint16_t s_drop[INPUT_NUM];			//环满丢弃的字节数
+static volatile uint16_t s_byte[INPUT_NUM];			//累计到达字节数
 
-/* 通道状态 */
-static InputSlot_t s_slot[INPUT_NUM];
-
-/* 视觉模块 2 的帧槽位与组帧状态（帧格式见 input.h 视觉段） */
-__IO VisionSlot_t visionSlot;
-static uint8_t  s_visBuf[VISION_FRAME_MAX];
-static uint16_t s_visLen;		/* 已收字节数（含帧头） */
-static uint16_t s_visTotal;		/* 本帧总长 = LEN + 5；0 = 尚未收到长度字节 */
+//通道状态
+static InputSlot_t s_slot[INPUT_NUM];	//每通道对外的字节级状态
 
 /*---- 中断服务：IDLE 触发，把本帧从 DMA 缓冲搬进环形缓冲 --------------*/
 
@@ -59,7 +52,7 @@ static void input_OnIdle(InputCh_t ch)
 
 			if (next == s_tail[ch])
 			{
-				s_drop[ch]++;			/* 环满：丢新字节，Step 侧由 lockCnt 反映 */
+				s_drop[ch]++;			//环满：丢新字节，Step 侧由 lockCnt 反映
 				continue;
 			}
 
@@ -70,7 +63,7 @@ static void input_OnIdle(InputCh_t ch)
 		__set_PRIMASK(primask);
 	}
 
-	/* 重启 DMA 接收下一帧（Normal 模式传完即停，须手动重置计数） */
+	//重启 DMA 接收下一帧（Normal 模式传完即停，须手动重置计数）
 	DMA_Cmd(s_stream[ch], DISABLE);
 	DMA_SetCurrDataCounter(s_stream[ch], INPUT_RX_BUF);
 	DMA_Cmd(s_stream[ch], ENABLE);
@@ -221,7 +214,7 @@ static void input_KeyStep(void)
 	{
 		s_key.wait = 0u;
 
-		/* 延时内状态可能已被后门改动，到点重新判定一次；IDLE 要连使能一起投 */
+		//延时内状态可能已被后门改动，到点重新判定一次；IDLE 要连使能一起投
 		if (chassis.state == CHS_IDLE)
 		{
 			contract_PostEvent(EV_ENABLE, 0);
@@ -239,7 +232,7 @@ static void input_KeyStep(void)
 /**
  * @brief  输入汇聚层初始化
  * @note   三条串口分别占 PA9/PA10、PB10/PB11、PA2/PA3；接收走 DMA + IDLE，无接收中断风暴。
- *         本函数不做任何帧解析，返回后三条通道只把到达字节搬进环形缓冲。
+ *         本函数不做任何帧解析：返回后三条通道只把到达字节搬进环形缓冲。
  *         摁键只配成输入，不占中断，由控制环轮询消抖
  * @author camelliahm
  */
@@ -256,7 +249,7 @@ void input_Init(void)
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2 | RCC_APB1Periph_USART3, ENABLE);
 
-	/* PA2/PA3 → USART2，PA9/PA10 → USART1 */
+	//PA2/PA3 → USART2，PA9/PA10 → USART1
 	g.GPIO_Pin   = GPIO_Pin_2 | GPIO_Pin_3 | GPIO_Pin_9 | GPIO_Pin_10;
 	g.GPIO_Mode  = GPIO_Mode_AF;
 	g.GPIO_OType = GPIO_OType_PP;
@@ -264,7 +257,7 @@ void input_Init(void)
 	g.GPIO_Speed = GPIO_Speed_50MHz;
 	GPIO_Init(GPIOA, &g);
 
-	/* PB10/PB11 → USART3 */
+	//PB10/PB11 → USART3
 	g.GPIO_Pin   = GPIO_Pin_10 | GPIO_Pin_11;
 	GPIO_Init(GPIOB, &g);
 
@@ -277,7 +270,7 @@ void input_Init(void)
 
 	for (i = 0u; i < INPUT_NUM; i++)
 	{
-		/* 串口：8N1，收发均配（当前只用于收，留 TX 便于回包） */
+		//串口：8N1，收发均配（当前只用于收，留 TX 便于回包）
 		u.USART_BaudRate            = INPUT_BAUD;
 		u.USART_WordLength          = USART_WordLength_8b;
 		u.USART_StopBits            = USART_StopBits_1;
@@ -286,7 +279,7 @@ void input_Init(void)
 		u.USART_Mode                = USART_Mode_Rx | USART_Mode_Tx;
 		USART_Init(s_usart[i], &u);
 
-		/* DMA：外设 → 内存，字节宽度，Normal 模式（一帧搬一次） */
+		//DMA：外设 → 内存，字节宽度，Normal 模式（一帧搬一次）
 		DMA_DeInit(s_stream[i]);
 		d.DMA_Channel            = s_chan[i];
 		d.DMA_PeripheralBaseAddr = (uint32_t)(&(s_usart[i]->DR));
@@ -305,7 +298,7 @@ void input_Init(void)
 		d.DMA_PeripheralBurst    = DMA_PeripheralBurst_Single;
 		DMA_Init(s_stream[i], &d);
 
-		/* 中断：只开 IDLE，不调 FreeRTOS API，故抢占优先级按普通外设给 5 */
+		//中断：只开 IDLE，不调 FreeRTOS API，故抢占优先级按普通外设给 5
 		n.NVIC_IRQChannel                   = s_irqn[i];
 		n.NVIC_IRQChannelPreemptionPriority = 5;
 		n.NVIC_IRQChannelSubPriority        = 0;
@@ -318,19 +311,7 @@ void input_Init(void)
 		DMA_Cmd(s_stream[i], ENABLE);
 	}
 
-	visionSlot.online       = 0u;
-	visionSlot.lastTick     = xTaskGetTickCount();
-	visionSlot.rxCnt        = 0u;
-	visionSlot.errCnt       = 0u;
-	visionSlot.obstFresh    = 0u;
-	visionSlot.count        = 0u;
-	visionSlot.taskFresh    = 0u;
-	visionSlot.task.len     = 0u;
-	visionSlot.task.code[0] = '\0';
-	s_visLen                = 0u;
-	s_visTotal              = 0u;
-
-	/* 摁键：只配成 GPIO 输入，无中断、无 DMA */
+	//摁键：只配成 GPIO 输入，无中断、无 DMA
 	RCC_AHB1PeriphClockCmd(KEY_CLK, ENABLE);
 
 	g.GPIO_Pin   = KEY_PIN;
@@ -340,19 +321,17 @@ void input_Init(void)
 	g.GPIO_Speed = GPIO_Speed_2MHz;
 	GPIO_Init(KEY_PORT, &g);
 
-	/* 以当前电平为基准：上电就被压住时不产生"按下"边沿 */
+	//以当前电平为基准：上电就被压住时不产生"按下"边沿
 	s_key.stable    = input_KeyDown();
 	s_key.cnt       = 0u;
 	s_key.wait      = 0u;
 	s_key.pressTick = 0u;
-
-	screen_Init();			// 串口屏软件槽位归零（USART2 硬件已在上面的循环里配好）
 }
 
 /**
  * @brief  周期处理：刷新三条通道的在线标志与丢弃计数，并扫描摁键
  * @note   本模块不做解析：字节只停在环形缓冲里、由各协议模块取用，无人取用时 lockCnt 会持续增长。
- *         串口屏通道由 screen_Step() 消费，视觉模块 2 通道由 vision_Step() 消费。
+ *         串口屏通道由 screen_Step() 消费，视觉两条通道由 vision1_Step() / vision_Step() 消费。
  *         必须每周期调用 —— 摁键的消抖与自启动倒计时都按调用次数/时刻推进
  * @author camelliahm
  */
@@ -435,243 +414,4 @@ uint16_t input_Write(InputCh_t ch, const uint8_t *src, uint16_t len)
 const InputSlot_t *input_GetSlot(InputCh_t ch)
 {
 	return (ch < INPUT_NUM) ? &s_slot[ch] : NULL;
-}
-
-/*---- 视觉模块 2 帧解析（匿名协议精简帧） ----------------------------*/
-
-/**
- * @brief  丢弃当前半帧，重新等帧头
- * @author camelliahm
- */
-static void vision_ResetFrame(void)
-{
-	s_visLen   = 0u;
-	s_visTotal = 0u;
-}
-
-/**
- * @brief  把任务码原样存入槽位
- * @param  data 数据内容起始  len 数据内容长度
- * @note   存 ASCII 原文不做数值解析；超长截断但仍置 taskFresh
- * @author camelliahm
- */
-static void vision_OnTask(const uint8_t *data, uint8_t len)
-{
-	uint8_t n = len;
-	uint8_t i;
-
-	if (n > (VISION_TASK_CODE_MAX - 1u))
-	{
-		n = (uint8_t)(VISION_TASK_CODE_MAX - 1u);
-	}
-
-	for (i = 0u; i < n; i++)
-	{
-		visionSlot.task.code[i] = (char)data[i];
-	}
-	visionSlot.task.code[n] = '\0';
-	visionSlot.task.len     = n;
-	visionSlot.taskFresh    = 1u;
-}
-
-/**
- * @brief  校验并分发一个完整帧
- * @param  f 长度为 LEN+5 的完整帧，f[0] = 帧头
- * @note   和校验覆盖帧头到 DATA 结束共 LEN+3 字节；校验不过只计数，不进槽位
- * @author camelliahm
- */
-static void vision_Dispatch(const uint8_t *f)
-{
-	uint8_t  len = f[2];
-	uint8_t  sum = 0u;
-	uint8_t  add = 0u;
-	uint16_t i;
-
-	for (i = 0u; i < ((uint16_t)len + 3u); i++)
-	{
-		sum = (uint8_t)(sum + f[i]);
-		add = (uint8_t)(add + sum);
-	}
-
-	if ((sum != f[(uint16_t)len + 3u]) || (add != f[(uint16_t)len + 4u]))
-	{
-		visionSlot.errCnt++;
-		return;
-	}
-
-	switch (f[1])
-	{
-	case VISION_ID_TASK:
-		vision_OnTask(&f[3], len);
-		break;
-
-	case VISION_ID_OBST:
-		break;					/* 数据内容未定：只计帧数，不解析 */
-
-	default:
-		visionSlot.errCnt++;	/* 功能码未定义 */
-		return;
-	}
-
-	visionSlot.rxCnt++;
-	visionSlot.lastTick = xTaskGetTickCount();
-}
-
-/**
- * @brief  逐字节组帧
- * @param  b 新到达的字节
- * @note   帧头起头，收满 LEN+5 字节即校验；帧头前的杂散字节与长度越界的帧都计入 errCnt
- * @author camelliahm
- */
-static void vision_Feed(uint8_t b)
-{
-	if (s_visLen == 0u)
-	{
-		if (b == VISION_FRAME_HEAD)
-		{
-			s_visBuf[0] = b;
-			s_visLen    = 1u;
-		}
-		else
-		{
-			visionSlot.errCnt++;
-		}
-		return;
-	}
-
-	s_visBuf[s_visLen] = b;
-	s_visLen++;
-
-	if (s_visLen == 3u)
-	{
-		s_visTotal = (uint16_t)s_visBuf[2] + VISION_FRAME_OVERHEAD;
-
-		if (s_visTotal > VISION_FRAME_MAX)
-		{
-			visionSlot.errCnt++;	/* 长度越界：丢弃本帧，等下一个帧头 */
-			vision_ResetFrame();
-		}
-		return;
-	}
-
-	if ((s_visTotal != 0u) && (s_visLen >= s_visTotal))
-	{
-		vision_Dispatch(s_visBuf);
-		vision_ResetFrame();
-	}
-}
-
-/**
- * @brief  从视觉通道环形缓冲取字节并组帧
- * @author camelliahm
- */
-static void vision_Parse(void)
-{
-	uint8_t b;
-
-	while (input_Read(INPUT_VISION2, &b, 1u) == 1u)
-	{
-		vision_Feed(b);
-	}
-}
-
-/**
- * @brief  刷新视觉槽位在线标志
- * @note   在线 = 最近收到过校验通过的完整帧
- * @author camelliahm
- */
-static void vision_Online(void)
-{
-	if ((xTaskGetTickCount() - visionSlot.lastTick) <= pdMS_TO_TICKS(VISION_FRAME_TIMEOUT_MS))
-	{
-		visionSlot.online = 1u;
-	}
-	else
-	{
-		visionSlot.online = 0u;
-	}
-}
-
-/**
- * @brief  周期处理：收帧 + 校验 + 刷新在线标志
- * @note   须与 input_Step() 一样每周期调用；当前无调用点（未接入控制环）
- * @author camelliahm
- */
-void vision_Step(void)
-{
-	vision_Parse();
-	vision_Online();
-}
-
-/**
- * @brief  取走一帧避障数据
- * @param  dst 目标缓冲（须至少有 max 条容量）  max 缓冲区可容纳条数
- * @retval 实际拷贝的条数；0 = 无新帧
- * @note   避障帧的数据内容未定，当前不会置 obstFresh，故恒返回 0
- * @author camelliahm
- */
-uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max)
-{
-	uint8_t n;
-	uint8_t i;
-
-	if ((dst == NULL) || (max == 0u) || (visionSlot.obstFresh == 0u))
-	{
-		return 0u;
-	}
-
-	n = visionSlot.count;
-	if (n > max)
-	{
-		n = max;
-	}
-
-	for (i = 0u; i < n; i++)
-	{
-		dst[i] = visionSlot.obst[i];
-	}
-
-	visionSlot.obstFresh = 0u;
-
-	return n;
-}
-
-/**
- * @brief  取走任务码
- * @param  dst 目标结构
- * @retval true = 取到
- * @note   取走后清 taskFresh，因此同一个任务码只会被消费一次
- * @author camelliahm
- */
-bool vision_TakeTask(VisionTask_t *dst)
-{
-	if ((dst == NULL) || (visionSlot.taskFresh == 0u))
-	{
-		return false;
-	}
-
-	*dst = visionSlot.task;
-	visionSlot.taskFresh = 0u;
-
-	return true;
-}
-
-/**
- * @brief  只读槽位
- * @author camelliahm
- */
-const VisionSlot_t *vision_GetSlot(void)
-{
-	return (const VisionSlot_t *)&visionSlot;
-}
-
-/**
- * @brief  查询有效识别距离
- * @retval 距离(mm)；0 = 未知（未标定）
- * @note   0 是"不可信"哨兵而非"距离为零"，调用方不得据此放行速度
- * @author camelliahm
- */
-int32_t vision_GetRangeMM(void)
-{
-	return (int32_t)VISION_RANGE_MM;
 }

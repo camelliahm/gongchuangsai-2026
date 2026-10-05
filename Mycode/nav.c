@@ -5,27 +5,27 @@
 #include "task.h"
 #include <math.h>
 
-#define NAV_TURN_HOLD_CNT	(NAV_TURN_HOLD_MS / NAV_CTRL_PERIOD_MS)
-#define NAV_DEG2RAD			(0.01745329252f)
+#define NAV_TURN_HOLD_CNT	(NAV_TURN_HOLD_MS / NAV_CTRL_PERIOD_MS)	//转向保持判据的周期数
+#define NAV_DEG2RAD			(0.01745329252f)	//度 → 弧度
 
 /*---- 内部状态 ----------------------------------------*/
 
 static struct {
-	NavState_t		state;
-	const NavSeg_t *map;
-	uint16_t		mapNum;
-	uint16_t		seg;
-	uint32_t		segTick;
-	uint16_t		hold;
-	uint8_t			pendStart;		/* 1 = 收到启动请求，等控制环上下文里装载 */
+	NavState_t		state;			//编排状态：是否在跑
+	const NavSeg_t *map;			//当前地图（段数组）
+	uint16_t		mapNum;			//地图段数
+	uint16_t		seg;			//当前段下标
+	uint32_t		segTick;		//当前段开始的 tick
+	uint16_t		hold;			//判据需持续的控制周期数
+	uint8_t			pendStart;		//1 = 收到启动请求，等控制环上下文里装载
 
-	/* 航向不再本层维护：直接用 chassisDrive.odomYawCont（连续域） */
-	float			targetYaw;
+	//航向不再本层维护：直接用 chassisDrive.odomYawCont（连续域）
+	float			targetYaw;		//本段目标航向(度)
 
-	/* 本段起点：位移判据在"段方向"上做投影，横向漂移不干扰 */
-	float			startX;
-	float			startY;
-	float			startYaw;
+	//本段起点：位移判据在"段方向"上做投影，横向漂移不干扰
+	float			startX;			//本段起点 X(mm)
+	float			startY;			//本段起点 Y(mm)
+	float			startYaw;		//本段起点航向(度)
 } s_nav;
 
 /**
@@ -53,7 +53,7 @@ static void nav_SegStart(void)
 
 	if (seg->type == NAV_SEG_TURN)
 	{
-		offset = (float)seg->value / 10.0f;		/* 0.1 度 → 度 */
+		offset = (float)seg->value / 10.0f;		//0.1 度 → 度
 	}
 
 	s_nav.startX   = chassisDrive.odomX;
@@ -62,7 +62,7 @@ static void nav_SegStart(void)
 	s_nav.hold     = 0u;
 	s_nav.segTick  = xTaskGetTickCount();
 
-	/* 目标航向与 odomYawCont 同在连续域，姿态环可直接相减 */
+	//目标航向与 odomYawCont 同在连续域，姿态环可直接相减
 	s_nav.targetYaw   = chassisDrive.odomYawCont + offset;
 	chassis.yawTarget = s_nav.targetYaw;
 
@@ -151,7 +151,7 @@ static uint8_t nav_SegStep(void)
 		return 1u;
 	}
 
-	/* 进入减速窗口后降速，减小过冲；到位判据仍按剩余距离 */
+	//进入减速窗口后降速，减小过冲；到位判据仍按剩余距离
 	v = (left <= (float)NAV_DECEL_MM) ? (int16_t)NAV_DECEL_VEL : seg->speed;
 	if (seg->value < 0) { v = (int16_t)(-v); }
 
@@ -190,7 +190,7 @@ static void nav_Begin(void)
 		return;
 	}
 
-	/* 航向基准取当前连续航向，故从任意位置启动都不会引入绝对角误差 */
+	//航向基准取当前连续航向，故从任意位置启动都不会引入绝对角误差
 	s_nav.state = NAV_RUN;
 	nav_SegStart();
 }
@@ -274,7 +274,7 @@ void nav_Step(void)
 {
 	uint16_t tmo;
 
-	/* 启动请求在本上下文消费：装载过程不会被状态机任务打断 */
+	//启动请求在本上下文消费：装载过程不会被状态机任务打断
 	if (s_nav.pendStart)
 	{
 		s_nav.pendStart = 0u;
@@ -286,14 +286,14 @@ void nav_Step(void)
 		return;
 	}
 
-	/* 一旦离开 RUNNING（故障 / 急停 / 被停车），立即交出控制权 */
+	//一旦离开 RUNNING（故障 / 急停 / 被停车），立即交出控制权
 	if (chassis.state != CHS_RUNNING)
 	{
 		nav_Abort();
 		return;
 	}
 
-	/* 单段超时（按段取）：收敛到 FAULT，不自行复位 */
+	//单段超时（按段取）：收敛到 FAULT，不自行复位
 	tmo = s_nav.map[s_nav.seg].timeout;
 	if (tmo == 0u)
 	{
@@ -319,7 +319,7 @@ void nav_Step(void)
 		chassis.vx = 0;
 		chassis.vy = 0;
 		chassis.w  = 0;
-		contract_PostEvent(EV_STOP, 0);		/* 复用现成的减速停链路收尾 */
+		contract_PostEvent(EV_STOP, 0);		//复用现成的减速停链路收尾
 		s_nav.state = NAV_DONE;
 		return;
 	}

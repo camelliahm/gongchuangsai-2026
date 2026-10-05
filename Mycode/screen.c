@@ -5,21 +5,21 @@
 
 /*---- 模块状态 ----------------------------------------------------*/
 
-/* 屏上报事件的槽位；解析在任务上下文的 screen_Step() 内完成 */
-__IO ScreenEvt_t screenEvt;
+//屏上报事件的槽位；解析在任务上下文的 screen_Step() 内完成
+__IO ScreenEvt_t screenEvt;			//屏上报事件槽位
 
-#define SCREEN_RX_FRAME_MAX	(48u)	/* 单帧正文上限（不含三字节结束符） */
+#define SCREEN_RX_FRAME_MAX	(48u)	//单帧正文上限（不含三字节结束符）
 
-/* 接收组帧状态：屏 → MCU 的帧同样以 0xFF 0xFF 0xFF 结尾 */
-static uint8_t  s_scrBuf[SCREEN_RX_FRAME_MAX];
-static uint16_t s_scrLen;
-static uint8_t  s_scrEnd;			/* 已收连续 0xFF 个数 */
+//接收组帧状态：屏 → MCU 的帧同样以 0xFF 0xFF 0xFF 结尾
+static uint8_t  s_scrBuf[SCREEN_RX_FRAME_MAX];	//收帧缓冲
+static uint16_t s_scrLen;			//帧体已收长度
+static uint8_t  s_scrEnd;			//已收连续 0xFF 个数
 
-/* 发送组帧缓冲：正文 + 三字节结束符 */
+//发送组帧缓冲：正文 + 三字节结束符
 typedef struct {
-	uint8_t  buf[SCREEN_TX_CMD_MAX + SCREEN_END_RUN];
-	uint16_t len;
-	uint8_t  over;					/* 1 = 正文超长，整条不发 */
+	uint8_t  buf[SCREEN_TX_CMD_MAX + SCREEN_END_RUN];	//指令正文 + 三字节结束符
+	uint16_t len;					//正文长度
+	uint8_t  over;					//1 = 正文超长，整条不发
 } ScreenTx_t;
 
 static void screen_Parse(void);
@@ -44,7 +44,7 @@ static void screen_Dispatch(const uint8_t *buf, uint16_t len)
 
 	switch (buf[0])
 	{
-	case SCREEN_EV_TOUCH:				/* 页面ID + 控件ID + 触摸事件 */
+	case SCREEN_EV_TOUCH:				//页面ID + 控件ID + 触摸事件
 		if (len != 4u)
 		{
 			e->errCnt++;
@@ -55,7 +55,7 @@ static void screen_Dispatch(const uint8_t *buf, uint16_t len)
 		e->touch = buf[3];
 		break;
 
-	case SCREEN_EV_PAGE:				/* 页面ID */
+	case SCREEN_EV_PAGE:				//页面ID
 		if (len != 2u)
 		{
 			e->errCnt++;
@@ -64,7 +64,7 @@ static void screen_Dispatch(const uint8_t *buf, uint16_t len)
 		e->page = buf[1];
 		break;
 
-	case SCREEN_EV_TOUCH_XY:			/* X(高,低) + Y(高,低) + 触摸事件 */
+	case SCREEN_EV_TOUCH_XY:			//X(高,低) + Y(高,低) + 触摸事件
 		if (len != 6u)
 		{
 			e->errCnt++;
@@ -75,7 +75,7 @@ static void screen_Dispatch(const uint8_t *buf, uint16_t len)
 		e->touch = buf[5];
 		break;
 
-	case SCREEN_EV_NUM:					/* 4 字节小端 */
+	case SCREEN_EV_NUM:					//4 字节小端
 		if (len != 5u)
 		{
 			e->errCnt++;
@@ -87,7 +87,7 @@ static void screen_Dispatch(const uint8_t *buf, uint16_t len)
 						 | ((uint32_t)buf[4] << 24));
 		break;
 
-	case SCREEN_EV_TEXT:				/* ASCII 内容，超长截断 */
+	case SCREEN_EV_TEXT:				//ASCII 内容，超长截断
 		{
 			uint16_t i;
 			uint16_t n = (uint16_t)(len - 1u);
@@ -132,7 +132,7 @@ static void screen_Parse(void)
 			s_scrEnd++;
 			if (s_scrEnd < SCREEN_END_RUN)
 			{
-				continue;			/* 结束符未收齐，先不入帧体 */
+				continue;			//结束符未收齐，先不入帧体
 			}
 
 			s_scrEnd = 0u;
@@ -144,7 +144,7 @@ static void screen_Parse(void)
 			continue;
 		}
 
-		/* 结束符被打断：把已收到的 0xFF 补回帧体 */
+		//结束符被打断：把已收到的 0xFF 补回帧体
 		while ((s_scrEnd > 0u) && (s_scrLen < SCREEN_RX_FRAME_MAX))
 		{
 			s_scrBuf[s_scrLen] = SCREEN_END_BYTE;
@@ -160,7 +160,7 @@ static void screen_Parse(void)
 		}
 		else
 		{
-			s_scrLen = 0u;			/* 超长：整帧丢弃，等下一个结束符重新起头 */
+			s_scrLen = 0u;			//超长：整帧丢弃，等下一个结束符重新起头
 			screenEvt.errCnt++;
 		}
 	}
@@ -230,7 +230,7 @@ static void screen_TxPutInt(ScreenTx_t *tx, int32_t v)
 	if (v < 0)
 	{
 		screen_TxPutCh(tx, '-');
-		u = (uint32_t)(~((uint32_t)v) + 1u);	/* 补码取绝对值 */
+		u = (uint32_t)(~((uint32_t)v) + 1u);	//补码取绝对值
 	}
 	else
 	{

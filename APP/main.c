@@ -3,6 +3,8 @@
 #include "contract.h"
 #include "servo.h"
 #include "input.h"
+#include "vision.h"
+#include "screen.h"
 #include "oled.h"
 #include "nav.h"
 #include "FreeRTOS.h"
@@ -15,10 +17,10 @@
 ***	任务划分与控制环周期取值的依据见工程根目录 README.md。
 **********************************************************/
 typedef struct {
-	TaskFunction_t entry;		/* 任务体 */
-	const char    *name;		/* 任务名，调试器里可见 */
-	uint16_t       stack;		/* 栈深度（字） */
-	UBaseType_t    prio;		/* 优先级，数值越大越高 */
+	TaskFunction_t entry;		//任务体
+	const char    *name;		//任务名，调试器里可见
+	uint16_t       stack;		//栈深度（字）
+	UBaseType_t    prio;		//优先级，数值越大越高
 } TaskDesc_t;
 
 static const TaskDesc_t s_tasks[] = {
@@ -27,7 +29,7 @@ static const TaskDesc_t s_tasks[] = {
 	{ contract_StateTask,   "STATE",  CHASSIS_STATE_TASK_STACK, CHASSIS_STATE_TASK_PRIO },
 };
 
-#define TASK_NUM	(sizeof(s_tasks) / sizeof(s_tasks[0]))
+#define TASK_NUM	(sizeof(s_tasks) / sizeof(s_tasks[0]))	//任务表项数
 
 /*---- FreeRTOS 钩子函数 -------------------------------*/
 
@@ -40,7 +42,7 @@ static const TaskDesc_t s_tasks[] = {
  */
 void vApplicationStackOverflowHook(struct tskTaskControlBlock *xTask, char *pcTaskName)
 {
-	(void)xTask;		/* 栈溢出，停在此处便于调试观察是哪个任务 */
+	(void)xTask;		//栈溢出，停在此处便于调试观察是哪个任务
 	(void)pcTaskName;
 
 	taskDISABLE_INTERRUPTS();
@@ -82,7 +84,9 @@ static void ALL_Init(void)
 {
 	board_init();                          // 硬件初始化（NVIC、时钟、GPIO、CAN）
 	servo_Init();                          // 三路舵机 PWM（TIM3 CH1~CH3）
-	input_Init();                          // 视觉模块1 / 视觉模块2 / 串口屏（USART1 / USART3 / USART2）
+	input_Init();                          // 三条串口（USART1 / USART3 / USART2）+ 摁键 GPIO
+	vision_Init();                         // 视觉 1 / 2 帧槽位归零（须在 input_Init 之后）
+	screen_Init();                         // 串口屏上报槽位归零（USART2 硬件在 input_Init）
 	oled_Init();                           // OLED 状态屏（软件 I2C）
 	nav_Init();                            // 编排层：装载默认地图，不自动启动
 	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁

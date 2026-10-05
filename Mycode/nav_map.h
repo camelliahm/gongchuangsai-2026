@@ -11,22 +11,22 @@
 #define NAV_MAP_FIELD_MM		(2400)						//场地边长
 #define NAV_MAP_FIELD_HALF		(NAV_MAP_FIELD_MM / 2)		//1200 十字中心线
 #define NAV_MAP_LANE_MM			(400)						//十字灰色行车道宽
-#define NAV_MAP_LANE_HALF		(NAV_MAP_LANE_MM / 2)
+#define NAV_MAP_LANE_HALF		(NAV_MAP_LANE_MM / 2)		//车道半宽
 
 /*---- 四块淡黄区（禁止进入）----*/
 #define NAV_MAP_YELLOW_MM		(450)						//边长；四块中心对称，夹出十字车道
 
 /*---- 启停区（300×300，右上 / 右下角各一块）----*/
-#define NAV_MAP_START_MM		(300)
+#define NAV_MAP_START_MM		(300)									//启停区边长
 #define NAV_MAP_START1_X0		(NAV_MAP_FIELD_MM - NAV_MAP_START_MM)	//2100
-#define NAV_MAP_START1_Y0		(0)
+#define NAV_MAP_START1_Y0		(0)										//启停区1 上边 Y（贴场地顶边）
 #define NAV_MAP_START2_Y0		(NAV_MAP_FIELD_MM - NAV_MAP_START_MM)	//2100
 
 /*---- 原料区（顶边电动转盘，φ300，台面高 80~100）----*/
 #define NAV_MAP_MAT_D_MM		(300)						//转盘直径
 #define NAV_MAP_MAT_CX_MIN		(1100)						//圆心 X 下限（现场随机）
 #define NAV_MAP_MAT_CX_MAX		(1300)						//圆心 X 上限（现场随机）
-#define NAV_MAP_MAT_CX_NOM		((NAV_MAP_MAT_CX_MIN + NAV_MAP_MAT_CX_MAX) / 2)
+#define NAV_MAP_MAT_CX_NOM		((NAV_MAP_MAT_CX_MIN + NAV_MAP_MAT_CX_MAX) / 2)	//原料区圆心 X 中值
 #define NAV_MAP_MAT_CY_NOM		(0)							//圆心落在顶边线上
 
 /*---- 暂存区（左边，580×150 竖向居中，3 个圆环）----*/
@@ -43,12 +43,12 @@
 /*---- 二维码板（右边墙，A4 横放，QR 80×80 居中）----*/
 #define NAV_MAP_QR_Y_MIN		(1100)						//板心 Y 下限（现场随机）
 #define NAV_MAP_QR_Y_MAX		(1300)						//板心 Y 上限（现场随机）
-#define NAV_MAP_QR_Y_NOM		(NAV_MAP_FIELD_HALF)
+#define NAV_MAP_QR_Y_NOM		(NAV_MAP_FIELD_HALF)		//二维码板板心 Y 中值
 #define NAV_MAP_QR_MM			(80)						//二维码边长
 
 /*---- 障碍物与物料（摘自命题要求的物理尺寸）----*/
 #define NAV_MAP_OBST_D_MM		(50)						//黑色模拟障碍物 φ50×100
-#define NAV_MAP_OBST_H_MM		(100)
+#define NAV_MAP_OBST_H_MM		(100)						//障碍物高度
 #define NAV_MAP_ITEM_D_MM		(80)						//物料最大尺寸
 #define NAV_MAP_ITEM_M_G		(100)						//物料最大质量(g)
 
@@ -56,7 +56,7 @@
 #define NAV_MAP_DOCK_HALF_MM	(150)						//车体半宽；停靠时车身外缘贴区域边界
 
 #define NAV_MAP_CROSS_X			NAV_MAP_FIELD_HALF		//1200 十字交点
-#define NAV_MAP_CROSS_Y			NAV_MAP_FIELD_HALF
+#define NAV_MAP_CROSS_Y			NAV_MAP_FIELD_HALF		//十字交点 Y
 
 #define NAV_MAP_DOCK_START1_X	(NAV_MAP_START1_X0 + NAV_MAP_START_MM / 2)	//2250
 #define NAV_MAP_DOCK_START1_Y	(NAV_MAP_START1_Y0 + NAV_MAP_START_MM / 2)	//150
@@ -92,41 +92,41 @@
    ⚠ 前提：起点 = 启停区 1 中心、机头朝 +X；转向正 = 逆时针（实车反向则 TURN 段取负）
    末段必须是 NAV_SEG_END */
 static const NavSeg_t s_defaultMap[] = {	//地图
-	/* ① 右移 1050 → (2250,1200)，机头正对右侧二维码板 */
+	//① 右移 1050 → (2250,1200)，机头正对右侧二维码板
 	{ NAV_SEG_STRAFE,  (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_LANE,  0 },
-	/* ② 停车读二维码（视觉模块 2）并把任务码上串口屏 */
+	//② 停车读二维码（视觉模块 2）并把任务码上串口屏
 	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_QR_MS, 0, 0 },
-	/* ③ 后退 1050 → (1200,1200)，退到十字交点 */
+	//③ 后退 1050 → (1200,1200)，退到十字交点
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_QR_X), NAV_MAP_SPEED_LANE, 0 },
-	/* ④ 左转 90° → 机头朝 -Y（场地顶边） */
+	//④ 左转 90° → 机头朝 -Y（场地顶边）
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	/* ⑤ 前进 900 → (1200,300)，正对原料区转盘 */
+	//⑤ 前进 900 → (1200,300)，正对原料区转盘
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },
-	/* ⑥ 抓取第 1 批 3 个物料（每次 1 个，机构动作占位） */
+	//⑥ 抓取第 1 批 3 个物料（每次 1 个，机构动作占位）
 	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_GRAB_MS, 0, 0 },
-	/* ⑦ 掉头 180° → 机头朝 +Y（场地底边） */
+	//⑦ 掉头 180° → 机头朝 +Y（场地底边）
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	/* ⑧ 前进 1800 → (1200,2100)，正对粗加工区 */
+	//⑧ 前进 1800 → (1200,2100)，正对粗加工区
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_LANE, 0 },
-	/* ⑨ 按任务码顺序放入粗加工区 1~3 号圆环 */
+	//⑨ 按任务码顺序放入粗加工区 1~3 号圆环
 	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_PLACE_MS, 0, 0 },
-	/* ⑩ 掉头 180° → 机头朝 -Y */
+	//⑩ 掉头 180° → 机头朝 -Y
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	/* ⑪ 前进 900 → (1200,1200)，回到十字交点 */
+	//⑪ 前进 900 → (1200,1200)，回到十字交点
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_CROSS_Y), NAV_MAP_SPEED_LANE, 0 },
-	/* ⑫ 左转 90° → 机头朝 -X（场地左边） */
+	//⑫ 左转 90° → 机头朝 -X（场地左边）
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	/* ⑬ 前进 900 → (300,1200)，正对暂存区 */
+	//⑬ 前进 900 → (300,1200)，正对暂存区
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_DOCK, 0 },
-	/* ⑭ 放入暂存区 1~3 号圆环 */
+	//⑭ 放入暂存区 1~3 号圆环
 	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_PLACE_MS, 0, 0 },
-	/* ⑮ 掉头 180° → 机头朝 +X */
+	//⑮ 掉头 180° → 机头朝 +X
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	/* ⑯ 前进 1950 → (2250,1200)，沿横向车道回到右端 */
+	//⑯ 前进 1950 → (2250,1200)，沿横向车道回到右端
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_LANE, 0 },
-	/* ⑰ 左转 90° → 机头朝 -Y */
+	//⑰ 左转 90° → 机头朝 -Y
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	/* ⑱ 前进 1050 → (2250,150)，回到启停区 1 */
+	//⑱ 前进 1050 → (2250,150)，回到启停区 1
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_DOCK, 0 },
 	{ NAV_SEG_END,     0, 0, 0 },
 };

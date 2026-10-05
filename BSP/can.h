@@ -10,26 +10,26 @@
 ***	任务侧不必再去读全局单缓冲（连续多帧时会被覆盖）。
 **********************************************************/
 typedef struct {
-	uint32_t ExtId;
-	uint8_t  DLC;
-	uint8_t  Data[8];
+	uint32_t ExtId;	//扩展帧 ID（ExtId[28:8] = 地址，[7:0] = 包序号）
+	uint8_t  DLC;	//数据长度
+	uint8_t  Data[8];	//数据内容
 } CAN_Frame_t;
 
 typedef struct {
-	__IO CanRxMsg CAN_RxMsg;
-	__IO CanTxMsg CAN_TxMsg;
+	__IO CanRxMsg CAN_RxMsg;	//接收中断填入的报文
+	__IO CanTxMsg CAN_TxMsg;	//发送用报文
 
-	__IO bool rxFrameFlag;
-}CAN_t;
+	__IO bool rxFrameFlag;	//收到帧标志（中断置位）
+} CAN_t;
 
-/* 接收队列深度（帧数），16 帧足以吸收一次突发 */
-#define CAN_RX_QUEUE_LEN	(16)
+//接收队列深度（帧数），16 帧足以吸收一次突发
+#define CAN_RX_QUEUE_LEN	(16)					//接收队列深度（帧数）
 
-void can_SendCmd(__IO uint8_t *cmd, uint8_t len);	/* 多包发送：cmd = [addr, 功能码, 参数..., 校验字节] */
+void can_SendCmd(__IO uint8_t *cmd, uint8_t len);	//多包发送：cmd = [addr, 功能码, 参数..., 校验字节]
 
-bool can_RtosInit(void);	/* 创建接收队列与发送互斥锁；须在创建任务之前调用 */
+bool can_RtosInit(void);	//创建接收队列与发送互斥锁；须在创建任务之前调用
 
-/* 阻塞等待一帧；timeout_ms = 0 表示不等待；retval: true-取到 false-超时/未初始化 */
+//阻塞等待一帧；timeout_ms = 0 表示不等待；retval: true-取到 false-超时/未初始化
 bool can_RecvFrame(CAN_Frame_t *out, uint32_t timeout_ms);
 
 /**********************************************************
@@ -44,8 +44,8 @@ bool can_RecvFrame(CAN_Frame_t *out, uint32_t timeout_ms);
 void can_TxLock(void);
 void can_TxUnlock(void);
 
-/* 因发送邮箱满而丢弃的帧数（诊断用） */
-extern __IO uint16_t can_TxDropCount;
+//因发送邮箱满而丢弃的帧数（诊断用）
+extern __IO uint16_t can_TxDropCount;	//发送丢弃计数（诊断）
 
 extern __IO CAN_t can;
 

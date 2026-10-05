@@ -1,9 +1,9 @@
 #include "servo.h"
 
-/* 通道 → 复用源（PC6/PC7/PC8 依次对应 TIM3 CH1/CH2/CH3） */
-static const uint16_t s_src[SERVO_NUM] = { GPIO_PinSource6, GPIO_PinSource7, GPIO_PinSource8 };
+//通道 → 复用源（PC6/PC7/PC8 依次对应 TIM3 CH1/CH2/CH3）
+static const uint16_t s_src[SERVO_NUM] = { GPIO_PinSource6, GPIO_PinSource7, GPIO_PinSource8 };	//三路舵机的引脚源（CH1 / CH2 / CH3）
 
-static float s_angle[SERVO_NUM];	/* 当前设定角度（非实际反馈） */
+static float s_angle[SERVO_NUM];	//当前设定角度（非实际反馈）
 
 /**
  * @brief  三路舵机 PWM 初始化
@@ -20,7 +20,7 @@ void servo_Init(void)
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
 	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
 
-	/* PC6/PC7/PC8 复用为 TIM3 推挽输出 */
+	//PC6/PC7/PC8 复用为 TIM3 推挽输出
 	g.GPIO_Pin   = GPIO_Pin_6 | GPIO_Pin_7 | GPIO_Pin_8;
 	g.GPIO_Mode  = GPIO_Mode_AF;
 	g.GPIO_OType = GPIO_OType_PP;
@@ -34,7 +34,7 @@ void servo_Init(void)
 		s_angle[i] = 0.0f;
 	}
 
-	/* 时基：1MHz 计数，周期 20ms（50Hz） */
+	//时基：1MHz 计数，周期 20ms（50Hz）
 	t.TIM_Prescaler     = SERVO_TIM_PSC;
 	t.TIM_Period        = SERVO_TIM_ARR;
 	t.TIM_ClockDivision = TIM_CKD_DIV1;
@@ -42,8 +42,8 @@ void servo_Init(void)
 	t.TIM_RepetitionCounter = 0;
 	TIM_TimeBaseInit(TIM3, &t);
 
-	/* 三通道 PWM1，初值取最小脉宽 */
-	TIM_OCStructInit(&o);				/* 先填默认值，避免栈上未初始化成员被读到 */
+	//三通道 PWM1，初值取最小脉宽
+	TIM_OCStructInit(&o);				//先填默认值，避免栈上未初始化成员被读到
 	o.TIM_OCMode      = TIM_OCMode_PWM1;
 	o.TIM_OutputState = TIM_OutputState_Enable;
 	o.TIM_OCPolarity  = TIM_OCPolarity_High;

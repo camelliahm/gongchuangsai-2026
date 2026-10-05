@@ -4,11 +4,11 @@
 #include "queue.h"
 #include "semphr.h"
 
-__IO CAN_t can = {0};
-__IO uint16_t can_TxDropCount = 0;
+__IO CAN_t can = {0};	//CAN 收发状态与槽位
+__IO uint16_t can_TxDropCount = 0;	//发送丢弃计数（诊断）
 
-static QueueHandle_t     s_canRxQueue = NULL;
-static SemaphoreHandle_t s_canTxMutex = NULL;
+static QueueHandle_t     s_canRxQueue = NULL;	//CAN 接收队列句柄
+static SemaphoreHandle_t s_canTxMutex = NULL;	//CAN 发送互斥锁句柄
 
 /**
  * @brief  创建接收队列与发送互斥锁

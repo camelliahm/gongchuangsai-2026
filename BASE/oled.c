@@ -6,19 +6,19 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/* 软件 I2C GPIO 操作（开漏 + 模块自带上拉；SCL/SDA 须在同一端口） */
-#define OLED_SCL_H()	GPIO_SetBits(OLED_SCL_PORT, OLED_SCL_PIN)
-#define OLED_SCL_L()	GPIO_ResetBits(OLED_SCL_PORT, OLED_SCL_PIN)
-#define OLED_SDA_H()	GPIO_SetBits(OLED_SDA_PORT, OLED_SDA_PIN)
-#define OLED_SDA_L()	GPIO_ResetBits(OLED_SDA_PORT, OLED_SDA_PIN)
+//软件 I2C GPIO 操作（开漏 + 模块自带上拉；SCL/SDA 须在同一端口）
+#define OLED_SCL_H()	GPIO_SetBits(OLED_SCL_PORT, OLED_SCL_PIN)	//SCL 拉高
+#define OLED_SCL_L()	GPIO_ResetBits(OLED_SCL_PORT, OLED_SCL_PIN)	//SCL 拉低
+#define OLED_SDA_H()	GPIO_SetBits(OLED_SDA_PORT, OLED_SDA_PIN)	//SDA 拉高
+#define OLED_SDA_L()	GPIO_ResetBits(OLED_SDA_PORT, OLED_SDA_PIN)	//SDA 拉低
 
-/* 8x16 字体：每字符 8 列 × 2 页 */
-#define OLED_CHAR_W			(8u)
-#define OLED_CHAR_FIRST		(0x20u)
-#define OLED_CHAR_LAST		(0x7Eu)
+//8x16 字体：每字符 8 列 × 2 页
+#define OLED_CHAR_W			(8u)	//字符点阵宽度(列)
+#define OLED_CHAR_FIRST		(0x20u)	//可显示的首个 ASCII 码（空格）
+#define OLED_CHAR_LAST		(0x7Eu)	//可显示的末个 ASCII 码（'~'）
 
-/* 显存：按页组织，与 SSD1306 的寻址方式一致 */
-static uint8_t s_gram[OLED_PAGE_NUM][OLED_WIDTH];
+//显存：按页组织，与 SSD1306 的寻址方式一致
+static uint8_t s_gram[OLED_PAGE_NUM][OLED_WIDTH];	//显存：按页组织，一页 8 行 × 128 列
 
 /*---- 软件 I2C 时序 -----------------------------------*/
 
@@ -74,7 +74,7 @@ static void oled_WriteCmd(uint8_t cmd)
 {
 	oled_I2cStart();
 	oled_I2cSendByte(OLED_I2C_ADDR);
-	oled_I2cSendByte(0x00u);			/* 控制字节：命令 */
+	oled_I2cSendByte(0x00u);			//控制字节：命令
 	oled_I2cSendByte(cmd);
 	oled_I2cStop();
 }
@@ -126,7 +126,7 @@ void oled_Refresh(void)
 
 		oled_I2cStart();
 		oled_I2cSendByte(OLED_I2C_ADDR);
-		oled_I2cSendByte(0x40u);		/* 控制字节：数据 */
+		oled_I2cSendByte(0x40u);		//控制字节：数据
 		for (x = 0u; x < OLED_WIDTH; x++)
 		{
 			oled_I2cSendByte(s_gram[page][x]);
@@ -160,12 +160,12 @@ static void oled_ShowChar(uint8_t line, uint8_t col, char ch)
 
 	p    = OLED_F8x16[(uint8_t)ch - OLED_CHAR_FIRST];
 	x    = (uint8_t)((col - 1u) * OLED_CHAR_W);
-	page = (uint8_t)((line - 1u) * 2u);		/* 8x16 → 每行占 2 页 */
+	page = (uint8_t)((line - 1u) * 2u);		//8x16 → 每行占 2 页
 
 	for (i = 0u; i < OLED_CHAR_W; i++)
 	{
-		s_gram[page][x + i]        = p[i];			/* 上半页 */
-		s_gram[page + 1u][x + i]   = p[i + OLED_CHAR_W];	/* 下半页 */
+		s_gram[page][x + i]        = p[i];			//上半页
+		s_gram[page + 1u][x + i]   = p[i + OLED_CHAR_W];	//下半页
 	}
 }
 
@@ -258,7 +258,7 @@ void oled_ShowStatus(void)
 
 	oled_Clear();
 
-	/* 行1：状态名 + 四轮在线数 */
+	//行1：状态名 + 四轮在线数
 	oled_ShowString(1u, 1u, contract_StateName(chassis.state));
 	buf[0] = (char)('0' + online);
 	buf[1] = '/';
@@ -266,18 +266,18 @@ void oled_ShowStatus(void)
 	buf[3] = '\0';
 	oled_ShowString(1u, 14u, buf);
 
-	/* 行2：目标底盘速度 vx / vy (mm/s) */
+	//行2：目标底盘速度 vx / vy (mm/s)
 	oled_ShowString(2u, 1u, "V");
 	oled_ShowNum(2u, 2u, (int32_t)chassis.vx, 4u);
 	oled_ShowNum(2u, 9u, (int32_t)chassis.vy, 4u);
 
-	/* 行3：里程计位移 X / Y (mm) */
+	//行3：里程计位移 X / Y (mm)
 	oled_ShowString(3u, 1u, "X");
 	oled_ShowNum(3u, 2u, (int32_t)chassisDrive.odomX, 4u);
 	oled_ShowString(3u, 9u, "Y");
 	oled_ShowNum(3u, 10u, (int32_t)chassisDrive.odomY, 4u);
 
-	/* 行4：航向 (度) + 升降高度 (mm) */
+	//行4：航向 (度) + 升降高度 (mm)
 	oled_ShowString(4u, 1u, "A");
 	oled_ShowNum(4u, 2u, (int32_t)chassisDrive.odomYaw, 4u);
 	oled_ShowString(4u, 9u, "H");
@@ -297,7 +297,7 @@ void oled_Init(void)
 	uint32_t i;
 	uint32_t j;
 
-	/* 上电稳定延时（约 50ms） */
+	//上电稳定延时（约 50ms）
 	for (i = 0u; i < 200u; i++)
 	{
 		for (j = 0u; j < 20000u; j++)
@@ -318,29 +318,29 @@ void oled_Init(void)
 	OLED_SCL_H();
 	OLED_SDA_H();
 
-	oled_WriteCmd(0xAE);		/* 关显示 */
-	oled_WriteCmd(0xD5);		/* 时钟分频 / 振荡频率 */
+	oled_WriteCmd(0xAE);		//关显示
+	oled_WriteCmd(0xD5);		//时钟分频 / 振荡频率
 	oled_WriteCmd(0x80);
-	oled_WriteCmd(0xA8);		/* 多路复用率 */
+	oled_WriteCmd(0xA8);		//多路复用率
 	oled_WriteCmd(0x3F);
-	oled_WriteCmd(0xD3);		/* 显示偏移 */
+	oled_WriteCmd(0xD3);		//显示偏移
 	oled_WriteCmd(0x00);
-	oled_WriteCmd(0x40);		/* 起始行 */
-	oled_WriteCmd(0xA1);		/* 左右方向：正常 */
-	oled_WriteCmd(0xC8);		/* 上下方向：正常 */
-	oled_WriteCmd(0xDA);		/* COM 引脚配置 */
+	oled_WriteCmd(0x40);		//起始行
+	oled_WriteCmd(0xA1);		//左右方向：正常
+	oled_WriteCmd(0xC8);		//上下方向：正常
+	oled_WriteCmd(0xDA);		//COM 引脚配置
 	oled_WriteCmd(0x12);
-	oled_WriteCmd(0x81);		/* 对比度 */
+	oled_WriteCmd(0x81);		//对比度
 	oled_WriteCmd(0xCF);
-	oled_WriteCmd(0xD9);		/* 预充电周期 */
+	oled_WriteCmd(0xD9);		//预充电周期
 	oled_WriteCmd(0xF1);
-	oled_WriteCmd(0xDB);		/* VCOMH 电压 */
+	oled_WriteCmd(0xDB);		//VCOMH 电压
 	oled_WriteCmd(0x30);
-	oled_WriteCmd(0xA4);		/* 输出跟随显存 */
-	oled_WriteCmd(0xA6);		/* 正常显示（非反色） */
-	oled_WriteCmd(0x8D);		/* 电荷泵 */
+	oled_WriteCmd(0xA4);		//输出跟随显存
+	oled_WriteCmd(0xA6);		//正常显示（非反色）
+	oled_WriteCmd(0x8D);		//电荷泵
 	oled_WriteCmd(0x14);
-	oled_WriteCmd(0xAF);		/* 开显示 */
+	oled_WriteCmd(0xAF);		//开显示
 
 	oled_Clear();
 	oled_Refresh();
@@ -353,7 +353,7 @@ void oled_Init(void)
  */
 void oled_Step(void)
 {
-	static uint32_t s_last;
+	static uint32_t s_last;	//上次刷新时刻（静态，跨调用保留）
 	uint32_t now = xTaskGetTickCount();
 
 	if ((now - s_last) >= pdMS_TO_TICKS(OLED_REFRESH_MS))

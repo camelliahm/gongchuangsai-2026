@@ -3,49 +3,50 @@
 #include "auxiliary.h"
 #include "nav.h"
 #include "input.h"
+#include "vision.h"
 #include "can.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
 
-/* 底盘应用层：状态机 + 系统级调度（不含控制算法），详见工程根目录 README.md */
+//底盘应用层：状态机 + 系统级调度（不含控制算法），详见工程根目录 README.md
 
-/* 静态存储期变量由启动代码清零；state / lastCmd 在 contract_Init() 中显式赋值 */
-__IO Chassis_t chassis;
+//静态存储期变量由启动代码清零；state / lastCmd 在 contract_Init() 中显式赋值
+__IO Chassis_t chassis;	//全局黑板：跨层共享的底盘状态
 
-#define ARRAY_SIZE(a)	(sizeof(a) / sizeof((a)[0]))
+#define ARRAY_SIZE(a)	(sizeof(a) / sizeof((a)[0]))	//数组元素个数
 
-/* 事件队列：事件稀疏，8 条足够 */
-#define CHASSIS_EVT_QUEUE_LEN	(8)
+//事件队列：事件稀疏，8 条足够
+#define CHASSIS_EVT_QUEUE_LEN	(8)	//状态机事件队列深度
 
 typedef struct {
-	ChassisEvent_t ev;
-	uint32_t       param;
+	ChassisEvent_t ev;	//事件码
+	uint32_t       param;	//事件参数
 } ChassisEvtMsg_t;
 
-static QueueHandle_t s_evtQueue = NULL;
+static QueueHandle_t s_evtQueue = NULL;	//状态机事件队列句柄
 
 /*---- 状态迁移表（EV_ESTOP 全局，在查表之前单独处理）----*/
 typedef struct {
-	ChassisState_t from;
-	ChassisEvent_t ev;
-	ChassisState_t to;
+	ChassisState_t from;							//迁移前状态
+	ChassisEvent_t ev;								//触发事件
+	ChassisState_t to;								//迁移后状态
 } ChassisTrans_t;
 
 static const ChassisTrans_t s_transTable[] = {
 	{ CHS_IDLE,    EV_ENABLE,      CHS_READY   },
 	{ CHS_READY,   EV_START,       CHS_RUNNING },
 	{ CHS_READY,   EV_DISABLE,     CHS_IDLE    },
-	{ CHS_READY,   EV_FAULT,       CHS_FAULT   },	/* 使能后掉线同样要报故障 */
+	{ CHS_READY,   EV_FAULT,       CHS_FAULT   },	//使能后掉线同样要报故障
 	{ CHS_RUNNING, EV_STOP,        CHS_BRAKING },
 	{ CHS_RUNNING, EV_FAULT,       CHS_FAULT   },
 	{ CHS_RUNNING, EV_DISABLE,     CHS_IDLE    },
 	{ CHS_BRAKING, EV_ARRIVED,     CHS_READY   },
 	{ CHS_BRAKING, EV_FAULT,       CHS_FAULT   },
 	{ CHS_BRAKING, EV_DISABLE,     CHS_IDLE    },
-	{ CHS_FAULT,   EV_CLEAR_FAULT, CHS_READY   },	/* 清除后回 READY，需重新 START */
+	{ CHS_FAULT,   EV_CLEAR_FAULT, CHS_READY   },	//清除后回 READY，需重新 START
 	{ CHS_FAULT,   EV_DISABLE,     CHS_IDLE    },
-	{ CHS_ESTOP,   EV_CLEAR_FAULT, CHS_IDLE    },	/* 急停解除一律回 IDLE，须重新使能 */
+	{ CHS_ESTOP,   EV_CLEAR_FAULT, CHS_IDLE    },	//急停解除一律回 IDLE，须重新使能
 };
 
 /*---- 状态进入动作（只编排各模块动作，不含控制算法）----*/
@@ -64,11 +65,12 @@ static void contract_OnEnter(ChassisState_t s)
 	switch (s)
 	{
 	case CHS_IDLE:
-		/* 断使能，电机可自由拖动 */
+		//断使能，电机可自由拖动
 		chassis_DriveBroadcast(0);
 		chassis_ClearOnline();
 		lift_SetEnable(false);
 		lift_ClearOnline();
+		grip_Safe();
 		chassis.vx = 0; chassis.vy = 0; chassis.w = 0;
 		break;
 
@@ -85,22 +87,23 @@ static void contract_OnEnter(ChassisState_t s)
 
 	case CHS_RUNNING:
 		chassis.vx = 0; chassis.vy = 0; chassis.w = 0;
-		nav_Start();	/* 从第 0 段重跑；实际装载由控制环在 nav_Step() 里完成 */
+		nav_Start();	//从第 0 段重跑；实际装载由控制环在 nav_Step() 里完成
 		break;
 
 	case CHS_BRAKING:
-		/* 只清目标速度；实际减速由控制环在 BRAKING 分支里逐周期下发零速 */
+		//只清目标速度；实际减速由控制环在 BRAKING 分支里逐周期下发零速
 		chassis.vx = 0; chassis.vy = 0; chassis.w = 0;
 		break;
 
 	case CHS_FAULT:
 	case CHS_ESTOP:
-		/* 先清目标速度，再立即停止四台电机 */
+		//先清目标速度，再立即停止四台电机
 		chassis.vx = 0; chassis.vy = 0; chassis.w = 0;
 		chassis_DriveBroadcast(2);
 		/* 升降轴单独处理：断使能立即撤扭矩并彻底断电，比 Stop_Now
 		 * （保持使能的减速停止）更彻底；负载靠 T8 梯形丝杆自锁停住 */
 		lift_SetEnable(false);
+		grip_Safe();
 		chassis.faultCnt++;
 		break;
 
@@ -121,7 +124,7 @@ static void contract_Step(ChassisEvent_t ev, uint32_t param)
 
 	(void)param;
 
-	/* 急停最高优先：任何状态都直接进入 ESTOP */
+	//急停最高优先：任何状态都直接进入 ESTOP
 	if ((ev == EV_ESTOP) && (chassis.state != CHS_ESTOP))
 	{
 		contract_OnEnter(CHS_ESTOP);
@@ -138,7 +141,7 @@ static void contract_Step(ChassisEvent_t ev, uint32_t param)
 		}
 	}
 
-	/* 当前状态不接受该事件：忽略并计数（调试时可观察 evtIgnored） */
+	//当前状态不接受该事件：忽略并计数（调试时可观察 evtIgnored）
 	chassis.evtIgnored++;
 }
 
@@ -183,14 +186,14 @@ static bool contract_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 		return false;
 	}
 
-	/* 参数 6 字节 + 消息码 = DLC 至少 7 */
+	//参数 6 字节 + 消息码 = DLC 至少 7
 	if (f->DLC >= 7)
 	{
 		vx = (int16_t)(((uint16_t)f->Data[1] << 8) | (uint16_t)f->Data[2]);
 		vy = (int16_t)(((uint16_t)f->Data[3] << 8) | (uint16_t)f->Data[4]);
 		w  = (int16_t)(((uint16_t)f->Data[5] << 8) | (uint16_t)f->Data[6]);
 
-		/* 速度指令只在 RUNNING 下生效，其他状态一律忽略 */
+		//速度指令只在 RUNNING 下生效，其他状态一律忽略
 		if (chassis.state == CHS_RUNNING)
 		{
 			chassis.vx = vx;
@@ -204,15 +207,16 @@ static bool contract_DriveCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 
 /*---- 消息路由表：按"码 & mask"查表派发；新增模块加一行 ----*/
 typedef struct {
-	uint8_t          seg;		/* 段基址，如 CHASSIS_SEG_LIFT */
-	uint8_t          mask;		/* 段掩码，如 CHASSIS_SEG_MASK */
-	ChassisHandler_t handler;	/* 该段消息的属主模块 */
+	uint8_t          seg;		//段基址，如 CHASSIS_SEG_LIFT
+	uint8_t          mask;		//段掩码，如 CHASSIS_SEG_MASK
+	ChassisHandler_t handler;	//该段消息的属主模块
 } ChassisRoute_t;
 
 static const ChassisRoute_t s_routeTable[] = {
-	{ CHASSIS_SEG_SYS,   CHASSIS_SEG_MASK, contract_SysCmd   },	/* 0x00~0x0F 系统   */
-	{ CHASSIS_SEG_DRIVE, CHASSIS_SEG_MASK, contract_DriveCmd },	/* 0x10~0x1F 底盘   */
-	{ CHASSIS_SEG_LIFT,  CHASSIS_SEG_MASK, aux_HandleCmd    },	/* 0x20~0x2F 升降轴 */
+	{ CHASSIS_SEG_SYS,   CHASSIS_SEG_MASK, contract_SysCmd   },	//0x00~0x0F 系统
+	{ CHASSIS_SEG_DRIVE, CHASSIS_SEG_MASK, contract_DriveCmd },	//0x10~0x1F 底盘
+	{ CHASSIS_SEG_LIFT,  CHASSIS_SEG_MASK, aux_HandleCmd    },	//0x20~0x2F 升降轴
+	{ CHASSIS_SEG_SERVO, CHASSIS_SEG_MASK, aux_HandleCmd    },	//0x30~0x3F 夹持机构（舵机）
 };
 
 /**
@@ -238,7 +242,7 @@ static void contract_HandleCmd(const CAN_Frame_t *f)
 		}
 	}
 
-	/* 段未注册 / 段内未知码：忽略并计数（调试时可观察 evtIgnored） */
+	//段未注册 / 段内未知码：忽略并计数（调试时可观察 evtIgnored）
 	chassis.evtIgnored++;
 	chassis.lastCmd = cmd;
 }
@@ -259,8 +263,8 @@ void contract_Init(void)
 	chassis.lastCmd   = CMD_NONE;
 	chassis.yawTarget = 0.0f;
 
-	chassis_DriveInit();	/* 四轮槽位、里程计、姿态环 PID */
-	aux_Init();				/* 升降轴槽位 */
+	chassis_DriveInit();	//四轮槽位、里程计、姿态环 PID
+	aux_Init();				//升降轴槽位
 }
 
 /**
@@ -287,7 +291,7 @@ void contract_HandleFrame(const CAN_Frame_t *f)
 	{
 		chassis_HandleFeedback((uint8_t)(addr - CHASSIS_ADDR_MOTOR_BASE), f);
 	}
-	/* 其它地址（含 0x00 广播）：忽略 */
+	//其它地址（含 0x00 广播）：忽略
 }
 
 /**
@@ -309,7 +313,7 @@ void contract_PostEvent(ChassisEvent_t ev, uint32_t param)
 	msg.ev    = ev;
 	msg.param = param;
 
-	/* 非阻塞投递：投递方可能是控制环，绝不能在这里挂住 */
+	//非阻塞投递：投递方可能是控制环，绝不能在这里挂住
 	(void)xQueueSend(s_evtQueue, &msg, 0);
 }
 
@@ -332,7 +336,7 @@ void contract_CtrlTask(void *pvParameters)
 	{
 		contract_ControlStep();
 
-		/* 保证固定周期，不随其他任务波动 */
+		//保证固定周期，不随其他任务波动
 		vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CHASSIS_CTRL_PERIOD_MS));
 	}
 }
@@ -352,7 +356,7 @@ void contract_CanRecvTask(void *pvParameters)
 
 	for (;;)
 	{
-		/* 超时 100ms 只为周期性回头；正常情况下中断一到就唤醒 */
+		//超时 100ms 只为周期性回头；正常情况下中断一到就唤醒
 		if (can_RecvFrame(&frame, 100))
 		{
 			contract_HandleFrame(&frame);
@@ -384,28 +388,28 @@ void contract_StateTask(void *pvParameters)
 /**
  * @brief  控制环周期内调用（每 CHASSIS_CTRL_PERIOD_MS 一次）
  * @note   编排顺序：各模块看门狗 → 各模块周期判断 → 编排层推进 → 按状态驱动底盘。
- *         各模块内部只做"自己的事"，互不干涉。
+ *         各模块内部只做"自己的事"，互不干涉，进行解耦式编排。
  * @author camelliahm
  */
 void contract_ControlStep(void)
 {
-	/* 1. 各模块周期处理。看门狗可能投递 EV_FAULT；输入汇聚层负责摁键自启动
-	 *    （按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志 */
-	chassis_DriveWatchdog();
+	//1. 各模块周期处理。输入汇聚层负责摁键自启动
+	chassis_DriveWatchdog();	//看门狗可能投递 EV_FAULT；
 	aux_Step();
-	input_Step();
+	input_Step();  //（按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志
+	vision1_Step();  //视觉模块 1 帧解析（物块颜色 + 对准相对距离）
 
-	/* 2. 停车过程的停稳判断（可能投递 EV_ARRIVED） */
+	//2. 停车过程的停稳判断（可能投递 EV_ARRIVED）
 	chassis_CheckBraking();
 
 	/* 3. 编排层推进：内部自判状态，离开 RUNNING 即中止并交还控制权。
 	 *    放在闸门之前是必须的 —— 它的归位逻辑靠"每周期都被调用"才能生效 */
 	nav_Step();
 
-	/* 4. 按状态驱动底盘 */
+	//4. 按状态驱动底盘
 	if (chassis.state == CHS_RUNNING)
 	{
-		chassis_DriveStep();	/* 里程计 → 逆运动学 → 姿态环 → 下发四轮 */
+		chassis_DriveStep();	//里程计 → 逆运动学 → 姿态环 → 下发四轮
 	}
 	else if (chassis.state == CHS_BRAKING)
 	{
@@ -413,7 +417,7 @@ void contract_ControlStep(void)
 		 * 覆盖同一周期内可能已下发的残留 RUNNING 速度指令 */
 		chassis_BrakeWheels();
 	}
-	/* 其余状态（IDLE / READY / FAULT / ESTOP）不下发任何速度 */
+	//其余状态（IDLE / READY / FAULT / ESTOP）不下发任何速度
 }
 
 /**

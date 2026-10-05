@@ -88,7 +88,7 @@ void can_init(void)
 	__IO uint8_t id_o, im_o; __IO uint16_t id_l, id_h, im_l, im_h;
 	id_o = (0x00);
 	id_h = (uint16_t)((uint16_t)id_o >> 5);										 // 高3位
-	id_l = (uint16_t)((uint16_t)id_o << 11) | CAN_Id_Extended; // 低5位
+	id_l = (uint16_t)((uint16_t)id_o << 11) | CAN_Id_Extended;	// 低5位
 	im_o = (0x00);
 	im_h = (uint16_t)((uint16_t)im_o >> 5);
 	im_l = (uint16_t)((uint16_t)im_o << 11) | CAN_Id_Extended;
