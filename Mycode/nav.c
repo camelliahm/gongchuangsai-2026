@@ -35,6 +35,10 @@ static struct {
 	uint8_t			loadAligned;	//1 = 本轮装载已对准，可以进行抓取
 	uint8_t			retry;			//本段已重试次数（对准与抓取共用该计数）
 	uint32_t		tryTick;		//本次尝试开始的 tick；重试时重置
+
+	//任务码第 1 组（第一批物料的搬运顺序）：第 k 位 = 第 k 轮要抓的颜色编号（1~6）
+	uint8_t			order[GRIP_TRAY_POS_NUM];	//搬运顺序的颜色编号
+	uint8_t			orderGot;					//1 = 已解析到任务码顺序
 } s_nav;
 
 /**
@@ -185,6 +189,43 @@ static uint8_t nav_AlignStep(void)
 }
 
 /**
+ * @brief  解析任务码第 1 组：三个颜色编号即第一批物料的搬运顺序
+ * @note   视觉模块 2 上报的是 ASCII 原文（如 "156+123+516+231"），本函数只取
+ *         第一个 '+' 之前的至多三位数字；没有新任务码时保留上次结果，
+ *         避免视觉短暂丢帧把顺序清成空
+ * @author camelliahm
+ */
+static void nav_TaskOrder(void)
+{
+	VisionTask_t t;
+	uint8_t i;
+	uint8_t n = 0u;
+
+	if (vision_TakeTask(&t) == false)
+	{
+		return;
+	}
+
+	for (i = 0u; (i < t.len) && (n < (uint8_t)GRIP_TRAY_POS_NUM); i++)
+	{
+		if ((t.code[i] >= '1') && (t.code[i] <= '6'))
+		{
+			s_nav.order[n] = (uint8_t)(t.code[i] - '0');
+			n++;
+		}
+		else if (n > 0u)
+		{
+			break;		//第 1 组结束（遇 '+' 或其它分隔符）
+		}
+	}
+
+	if (n == (uint8_t)GRIP_TRAY_POS_NUM)
+	{
+		s_nav.orderGot = 1u;
+	}
+}
+
+/**
  * @brief  装载段：每轮先对准再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
  * @retval 1 = 三轮装满；0 = 进行中或已判故障
  * @note   机构空闲时才发起下一轮，抓取失败按 NAV_LOAD_RETRY 重发（grip_LoadOnce 会清故障位）；
@@ -201,7 +242,8 @@ static uint8_t nav_LoadStep(void)
 
 	if (grip_AllLoaded() == true)
 	{
-		return 1u;
+		//装满后还有"物料盘归位"的收尾动作，等机构空闲才算本段走完
+		return (grip_IsBusy() == false) ? 1u : 0u;
 	}
 
 	if (grip_IsBusy() == true)
@@ -285,6 +327,14 @@ static void nav_SegStart(void)
 	if ((seg->type == NAV_SEG_HOME) && (lift.homed == 0u))
 	{
 		lift_Home();
+	}
+
+	//装载段入口：取任务码第 1 组作为搬运顺序，并清装载计数
+	//（不清则 grip_AllLoaded() 恒真 —— 跑完一批再启动导航，本段会秒过）
+	if (seg->type == NAV_SEG_LOAD)
+	{
+		nav_TaskOrder();
+		grip_ResetLoad();
 	}
 
 	//目标航向与 odomYawCont 同在连续域，姿态环可直接相减
@@ -440,6 +490,8 @@ static void nav_Begin(void)
  */
 void nav_Init(void)
 {
+	uint8_t i;
+
 	s_nav.state     = NAV_IDLE;
 	s_nav.map       = s_defaultMap;
 	s_nav.mapNum    = NAV_DEFAULT_NUM;
@@ -456,6 +508,12 @@ void nav_Init(void)
 	s_nav.loadAligned = 0u;
 	s_nav.retry       = 0u;
 	s_nav.tryTick     = 0u;
+
+	for (i = 0u; i < (uint8_t)GRIP_TRAY_POS_NUM; i++)
+	{
+		s_nav.order[i] = 0u;
+	}
+	s_nav.orderGot = 0u;
 }
 
 /**

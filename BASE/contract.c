@@ -398,6 +398,7 @@ void contract_ControlStep(void)
 	aux_Step();
 	input_Step();  //（按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志
 	vision1_Step();  //视觉模块 1 帧解析（物块颜色 + 对准相对距离）
+	vision_Step();  //视觉模块 2 帧解析（二维码任务码 / 避障列表）
 
 	//2. 停车过程的停稳判断（可能投递 EV_ARRIVED）
 	chassis_CheckBraking();

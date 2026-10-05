@@ -111,6 +111,20 @@ bool lift_IsMoving(void);
 #define GRIP_ROT_SLEW_DEG	(1.0f)		//旋转轴单周期最大角度增量(°)：限速使动作柔和；180° 约 0.9 s  ⚠ 待实测
 #define GRIP_ROT_TOL_DEG	(2.0f)		//旋转轴到位判据(°)
 
+/*---- 车载物料盘（旋转舵机 = TIM3 CH3 = PC8，270° 行程）----*/
+/* 三槽位按搬运顺序落料：任务码第 1 组的第 k 位 → 槽位 k；
+ * 槽位角即舵机指令角，机械上把槽位 k 装成该角正对夹持机构的落料点（顺序 1 = 位置一 = 0°） */
+
+#define GRIP_TRAY_CH		(2u)		//物料盘舵机通道（TIM3 CH3 = PC8）
+#define GRIP_TRAY_POS_NUM	(3u)		//槽位数量，须与 GRIP_LOAD_TOTAL 一致
+
+#define GRIP_TRAY_POS1_DEG	(0.0f)		//槽位一(°)：顺序 1 的物料落点，兼上电 / 换批复位角
+#define GRIP_TRAY_POS2_DEG	(120.0f)	//槽位二(°)：顺序 2 的物料落点
+#define GRIP_TRAY_POS3_DEG	(240.0f)	//槽位三(°)：顺序 3 的物料落点
+
+#define GRIP_TRAY_SLEW_DEG	(1.0f)		//物料盘单周期最大角度增量(°)：限速使动作柔和；240° 约 1.2 s  ⚠ 待实测
+#define GRIP_TRAY_TOL_DEG	(2.0f)		//物料盘到位判据(°)
+
 #define GRIP_JAW_OPEN_DEG	(10.0f)		//夹子张开角(°)  ⚠ 占位值，待实测
 #define GRIP_JAW_CLOSE_DEG	(80.0f)		//夹子夹紧角(°)  ⚠ 占位值，待实测
 #define GRIP_JAW_SETTLE_MS	(300u)		//夹子动作后的等待时长(ms)，等舵机走完
@@ -138,6 +152,7 @@ typedef enum {
 	GRIP_JAW_OPEN,		//松开
 	GRIP_LIFT_CLEAR,	//升高让开料盘已放物料
 	GRIP_ROT_SAFE,		//旋转回安全位
+	GRIP_TRAY_HOME,		//物料盘回位置一（仅三轮装满后）
 	GRIP_PHASE_NUM
 } GripPhase_t;
 
@@ -148,15 +163,18 @@ typedef struct {
 	uint8_t	 loadCount;		//已完成的装载轮数（满 GRIP_LOAD_TOTAL 即完成一个原料区）
 	float	 rotTarget;		//旋转轴目标角(°)（由斜坡逐步逼近）
 	float	 rotNow;		//旋转轴当前角(°)（斜坡中间值，非舵机反馈）
+	float	 trayTarget;	//物料盘目标角(°)（由斜坡逐步逼近）
+	float	 trayNow;		//物料盘当前角(°)（斜坡中间值，非舵机反馈）
 	uint32_t phaseTick;		//进入当前阶段的 tick（超时判据）
 } Grip_t;
 
 extern __IO Grip_t grip;
 
-//安全姿态：旋转轴回 90° + 夹子张开 + 中止序列；IDLE / FAULT / ESTOP 由 contract_OnEnter() 调用
+/* 安全姿态：旋转轴回 90° + 夹子张开 + 中止序列；IDLE / FAULT / ESTOP 由 contract_OnEnter() 调用；
+ * 物料盘不在安全姿态内 —— 盘上可能已有物料，急停时转动会把它甩出去，故保持当前角不动 */
 void grip_Safe(void);
 
-/* 启动一轮装载（取料 → 转 180° → 落到物料盘 → 回安全位）；
+/* 启动一轮装载（取料 → 转 180° 并同步把物料盘转到本轮槽位 → 落到物料盘 → 回安全位）；
  * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零） */
 bool grip_LoadOnce(void);
 
@@ -168,6 +186,15 @@ void grip_RotTo(float deg);
 
 //夹子开 / 合：true = 夹紧，false = 张开
 void grip_SetJaw(bool close);
+
+//物料盘转到第 pos 个槽位（1~GRIP_TRAY_POS_NUM），内部按 GRIP_TRAY_SLEW_DEG 斜坡推进
+void grip_TrayTo(uint8_t pos);
+
+//物料盘回位置一（上电姿态；换批复位）
+void grip_TrayHome(void);
+
+//装载计数清零（每批装载开始调用；不清则 grip_AllLoaded() 恒真，装载段会秒过）
+void grip_ResetLoad(void);
 
 //序列是否进行中 / 三轮是否全部装完
 bool grip_IsBusy(void);

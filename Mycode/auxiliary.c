@@ -242,6 +242,11 @@ bool lift_IsMoving(void)
 
 __IO Grip_t grip;	//夹持机构状态
 
+//槽位序号(1~3) → 物料盘角度，次序与 GRIP_TRAY_POS*_DEG 一致
+static const float s_trayDeg[GRIP_TRAY_POS_NUM] = {
+	GRIP_TRAY_POS1_DEG, GRIP_TRAY_POS2_DEG, GRIP_TRAY_POS3_DEG
+};
+
 /**
  * @brief  设定旋转轴目标角
  * @param  deg 目标角(度)
@@ -263,6 +268,43 @@ void grip_RotTo(float deg)
 void grip_SetJaw(bool close)
 {
 	(void)servo_SetAngle(GRIP_JAW_CH, close ? GRIP_JAW_CLOSE_DEG : GRIP_JAW_OPEN_DEG);
+}
+
+/**
+ * @brief  物料盘转到指定槽位
+ * @param  pos 槽位序号 1~GRIP_TRAY_POS_NUM，越界忽略
+ * @note   只记目标，实际转动由 tray_Step() 按 GRIP_TRAY_SLEW_DEG 每周期逼近；
+ *         270° 舵机一步跳 240° 会把盘上的物料甩出去
+ * @author camelliahm
+ */
+void grip_TrayTo(uint8_t pos)
+{
+	if ((pos >= 1u) && (pos <= GRIP_TRAY_POS_NUM))
+	{
+		grip.trayTarget = s_trayDeg[pos - 1u];
+	}
+}
+
+/**
+ * @brief  物料盘回位置一
+ * @note   上电姿态与换批复位共用；同样走斜坡，不会一步跳
+ * @author camelliahm
+ */
+void grip_TrayHome(void)
+{
+	grip_TrayTo(1u);
+}
+
+/**
+ * @brief  装载计数清零
+ * @note   每批装载由编排层在段入口调用；不清则 grip_AllLoaded() 恒真，装载段会秒过。
+ *         顺带把物料盘归位 —— 第 1 轮本来也要转到位置一，提前转可省掉那一段等待
+ * @author camelliahm
+ */
+void grip_ResetLoad(void)
+{
+	grip.loadCount = 0u;
+	grip_TrayHome();
 }
 
 /**
@@ -353,11 +395,15 @@ static void grip_Enter(GripPhase_t p)
 	case GRIP_LOWER_PICK:  grip_LiftTo(GRIP_H_PICK_MM);    break;
 	case GRIP_JAW_CLOSE:   grip_SetJaw(true);              break;
 	case GRIP_LIFT_UP:     grip_LiftTo(GRIP_H_SAFE_MM);    break;
-	case GRIP_ROT_PLACE:   grip_RotTo(GRIP_ROT_PLACE_DEG); break;
+	case GRIP_ROT_PLACE:	//与夹持轴同时起步，两轴并行：本轮槽位 = 已完成轮数 + 1
+		grip_RotTo(GRIP_ROT_PLACE_DEG);
+		grip_TrayTo((uint8_t)(grip.loadCount + 1u));
+		break;
 	case GRIP_LOWER_PLACE: grip_LiftTo(GRIP_H_PLACE_MM);   break;
 	case GRIP_JAW_OPEN:    grip_SetJaw(false);             break;
 	case GRIP_LIFT_CLEAR:  grip_LiftTo(GRIP_H_SAFE_MM);    break;
 	case GRIP_ROT_SAFE:    grip_RotTo(GRIP_ROT_SAFE_DEG);  break;
+	case GRIP_TRAY_HOME:   grip_TrayHome();                break;
 
 	default:
 		break;
@@ -390,6 +436,33 @@ static void rot_Step(void)
 }
 
 /**
+ * @brief  物料盘斜坡：每个控制周期向目标角逼近一步
+ * @note   与 rot_Step() 同构，两者在同一个控制周期里各自推进一格 ——
+ *         "夹持轴转 180° 的同时物料盘转到本轮槽位"就是靠这一层实现并行，而非时间配平；
+ *         已到位就不再写舵机，避免无谓的比较值更新
+ * @author camelliahm
+ */
+static void tray_Step(void)
+{
+	float d = grip.trayTarget - grip.trayNow;
+
+	if (d > GRIP_TRAY_SLEW_DEG)
+	{
+		d = GRIP_TRAY_SLEW_DEG;
+	}
+	else if (d < -GRIP_TRAY_SLEW_DEG)
+	{
+		d = -GRIP_TRAY_SLEW_DEG;
+	}
+
+	if (d != 0.0f)
+	{
+		grip.trayNow += d;
+		(void)servo_SetAngle(GRIP_TRAY_CH, grip.trayNow);
+	}
+}
+
+/**
  * @brief  初始化夹持机构：上电姿态 = 安全位 + 夹子张开
  * @note   上电时以当前电平为基准先给出姿态，避免上电瞬间舵机乱甩
  * @author camelliahm
@@ -400,18 +473,22 @@ static void grip_Init(void)
 	grip.busy      = 0u;
 	grip.fault     = 0u;
 	grip.loadCount = 0u;
-	grip.rotTarget = GRIP_ROT_SAFE_DEG;
-	grip.rotNow    = GRIP_ROT_SAFE_DEG;
-	grip.phaseTick = xTaskGetTickCount();
+	grip.rotTarget  = GRIP_ROT_SAFE_DEG;
+	grip.rotNow     = GRIP_ROT_SAFE_DEG;
+	grip.trayTarget = GRIP_TRAY_POS1_DEG;
+	grip.trayNow    = GRIP_TRAY_POS1_DEG;
+	grip.phaseTick  = xTaskGetTickCount();
 
 	(void)servo_SetAngle(GRIP_ROT_CH, GRIP_ROT_SAFE_DEG);
 	(void)servo_SetAngle(GRIP_JAW_CH, GRIP_JAW_OPEN_DEG);
+	(void)servo_SetAngle(GRIP_TRAY_CH, GRIP_TRAY_POS1_DEG);
 }
 
 /**
  * @brief  夹持机构周期任务：推进一轮装载动作序列
- * @note   仅在 busy 时动作：升降阶段等 lift_IsMoving() 归零，旋转阶段等角度到位，
- *         两者都有超时兜底；一轮装完 loadCount 自增并回到空闲
+ * @note   仅在 busy 时动作：升降阶段等 lift_IsMoving() 归零，旋转阶段等角度到位
+ *         （落盘阶段还要等物料盘转到本轮槽位），都有超时兜底；
+ *         一轮装完 loadCount 自增，装满 GRIP_LOAD_TOTAL 轮则把物料盘转回位置一
  * @author camelliahm
  */
 void grip_Step(void)
@@ -464,7 +541,9 @@ void grip_Step(void)
 		break;
 
 	case GRIP_ROT_PLACE:
-		if (grip_Abs(grip.rotNow - GRIP_ROT_PLACE_DEG) <= GRIP_ROT_TOL_DEG)
+		//双轴到位才算完：夹持轴到落盘位，且物料盘已把本轮槽位转到落料点
+		if ((grip_Abs(grip.rotNow - GRIP_ROT_PLACE_DEG) <= GRIP_ROT_TOL_DEG) &&
+			(grip_Abs(grip.trayNow - grip.trayTarget) <= GRIP_TRAY_TOL_DEG))
 		{
 			grip_Enter(GRIP_LOWER_PLACE);
 		}
@@ -510,6 +589,25 @@ void grip_Step(void)
 			{
 				grip.loadCount++;
 			}
+
+			if (grip.loadCount >= GRIP_LOAD_TOTAL)
+			{
+				grip_Enter(GRIP_TRAY_HOME);		//本批装满：物料盘归位，等换批 / 卸料
+			}
+			else
+			{
+				grip_Abort();
+			}
+		}
+		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_TRAY_HOME:
+		if (grip_Abs(grip.trayNow - GRIP_TRAY_POS1_DEG) <= GRIP_TRAY_TOL_DEG)
+		{
 			grip_Abort();
 		}
 		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
@@ -870,6 +968,7 @@ void aux_Step(void)
 
 	/*---- 夹持机构 ----*/
 	rot_Step();		//旋转轴斜坡：无条件推进，安全姿态也靠它
+	tray_Step();	//物料盘斜坡：同样无条件推进，归位 / 换批也靠它
 	grip_Step();	//装载动作序列（busy = 0 时直接返回）
 }
 

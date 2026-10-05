@@ -3,6 +3,11 @@
 //通道 → 复用源（PC6/PC7/PC8 依次对应 TIM3 CH1/CH2/CH3）
 static const uint16_t s_src[SERVO_NUM] = { GPIO_PinSource6, GPIO_PinSource7, GPIO_PinSource8 };	//三路舵机的引脚源（CH1 / CH2 / CH3）
 
+//每通道量程：CH1/CH2 是 180° 舵机，CH3 是 270° 舵机（车载物料盘）
+static const float s_degMax[SERVO_NUM]   = { SERVO_ANGLE_MAX, SERVO_ANGLE_MAX, SERVO_ANGLE_MAX_CH3 };		//各通道角度量程(°)
+static const uint16_t s_usMin[SERVO_NUM] = { SERVO_PULSE_MIN_US, SERVO_PULSE_MIN_US, SERVO_PULSE_MIN_US_CH3 };	//各通道最小脉宽(us)
+static const uint16_t s_usMax[SERVO_NUM] = { SERVO_PULSE_MAX_US, SERVO_PULSE_MAX_US, SERVO_PULSE_MAX_US_CH3 };	//各通道最大脉宽(us)
+
 static float s_angle[SERVO_NUM];	//当前设定角度（非实际反馈）
 
 /**
@@ -69,8 +74,8 @@ bool servo_SetPulse(uint8_t ch, uint16_t us)
 		return false;
 	}
 
-	if (us < SERVO_PULSE_MIN_US) { us = SERVO_PULSE_MIN_US; }
-	if (us > SERVO_PULSE_MAX_US) { us = SERVO_PULSE_MAX_US; }
+	if (us < s_usMin[ch]) { us = s_usMin[ch]; }
+	if (us > s_usMax[ch]) { us = s_usMax[ch]; }
 
 	switch (ch)
 	{
@@ -79,17 +84,17 @@ bool servo_SetPulse(uint8_t ch, uint16_t us)
 	default: TIM_SetCompare3(TIM3, us); break;
 	}
 
-	s_angle[ch] = (float)(us - SERVO_PULSE_MIN_US) * SERVO_ANGLE_MAX
-				/ (float)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US);
+	s_angle[ch] = (float)(us - s_usMin[ch]) * s_degMax[ch]
+				/ (float)(s_usMax[ch] - s_usMin[ch]);
 	return true;
 }
 
 /**
  * @brief  设置通道角度
  * @param  ch  通道号 0~SERVO_NUM-1
- * @param  deg 角度(度)，越界截断到 0~SERVO_ANGLE_MAX
+ * @param  deg 角度(度)，越界截断到 0~该通道量程（见 s_degMax）
  * @retval true = 已设置；false = 通道号非法
- * @note   脉宽与角度按 SERVO_PULSE_MIN/MAX_US 线性映射，换舵机只需改这两个宏
+ * @note   脉宽与角度按该通道的 s_usMin/s_usMax 线性映射，换舵机只改 servo.h 的标定宏
  * @author camelliahm
  */
 bool servo_SetAngle(uint8_t ch, float deg)
@@ -101,11 +106,11 @@ bool servo_SetAngle(uint8_t ch, float deg)
 		return false;
 	}
 
-	if (deg < 0.0f)              { deg = 0.0f; }
-	if (deg > SERVO_ANGLE_MAX)   { deg = SERVO_ANGLE_MAX; }
+	if (deg < 0.0f)           { deg = 0.0f; }
+	if (deg > s_degMax[ch])   { deg = s_degMax[ch]; }
 
-	us = (uint16_t)((float)SERVO_PULSE_MIN_US
-		+ (float)(SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * (deg / SERVO_ANGLE_MAX) + 0.5f);
+	us = (uint16_t)((float)s_usMin[ch]
+		+ (float)(s_usMax[ch] - s_usMin[ch]) * (deg / s_degMax[ch]) + 0.5f);
 
 	(void)servo_SetPulse(ch, us);
 	s_angle[ch] = deg;

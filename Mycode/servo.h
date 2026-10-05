@@ -7,11 +7,16 @@
 
 #define SERVO_NUM			(3u)		//舵机路数
 
-/*---- 脉宽 ↔ 角度标定：不同型号舵机行程不同，改这两个宏即可 ----*/
+/*---- 脉宽 ↔ 角度标定：按通道给，不同型号舵机行程不同 ----*/
 #define SERVO_FREQ_HZ		(50u)		//舵机标准频率
-#define SERVO_PULSE_MIN_US	(500u)		//最小角度对应脉宽
-#define SERVO_PULSE_MAX_US	(2500u)		//最大角度对应脉宽
-#define SERVO_ANGLE_MAX		(180.0f)	//脉宽范围对应的角度
+#define SERVO_PULSE_MIN_US	(500u)		//CH1/CH2 最小角度对应脉宽
+#define SERVO_PULSE_MAX_US	(2500u)		//CH1/CH2 最大角度对应脉宽
+#define SERVO_ANGLE_MAX		(180.0f)	//CH1/CH2 脉宽范围对应的角度
+
+//CH3（通道索引 2，PC8）单独标定：车载物料盘用 270° 舵机，量程与另两路不同
+#define SERVO_PULSE_MIN_US_CH3	(500u)		//CH3 最小角度对应脉宽(us)  ⚠ 待实测
+#define SERVO_PULSE_MAX_US_CH3	(2500u)		//CH3 最大角度对应脉宽(us)  ⚠ 待实测
+#define SERVO_ANGLE_MAX_CH3		(270.0f)	//CH3 脉宽范围对应的角度
 
 /*---- 时基：TIM3 挂 APB1，定时器时钟 84MHz ----*/
 //PSC = 84-1 → 计数 1MHz（1 格 = 1us）；ARR = 1000000/50-1 → 周期 20ms
