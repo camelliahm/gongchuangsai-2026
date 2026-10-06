@@ -6,7 +6,7 @@
 //底盘驱动层（四轮麦轮）：驱动器动作 / 反馈看门狗 / 停稳判断 / 底盘运动学，详见 README.md
 
 /*---- 控制环参数 ----*/
-#define CHASSIS_CTRL_PERIOD_MS		(5u)	//控制环周期（须与 auxiliary.h 的 AUX_CTRL_PERIOD_MS 一致）
+#define CHASSIS_CTRL_PERIOD_MS		(5u)	//控制环周期（须与 lift_axis.h 的 LIFT_CTRL_PERIOD_MS 一致）
 #define CHASSIS_FB_PERIOD_MS		(20u)	//驱动器定时上报周期
 #define CHASSIS_FB_TIMEOUT_MS		(100u)	//超过则判掉线
 #define CHASSIS_STOP_VEL_TH			(30)	//停稳判据：转速阈值(RPM)

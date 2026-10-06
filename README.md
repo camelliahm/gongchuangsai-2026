@@ -17,13 +17,15 @@
 | `BASE/oled.c/.h`<br>`BASE/oled_font.h` | **显示层**：SSD1306 128x64 状态屏（软件 I2C，只读黑板，不参与控制） | 状态机迁移、任何控制逻辑 |
 | `BASE/PID_Mod.c/.h` | **通用算法层**：PID 控制器（外部移植，只引用不修改） | 状态机迁移、硬件访问 |
 | `Mycode/chassis_drive.c/.h` | **底盘驱动层**：四轮动作 / 反馈 / 看门狗 / 停稳判断 + 里程计 / 麦轮逆解 / 姿态环 | 状态机迁移、升降轴 |
-| `Mycode/auxiliary.c/.h` | **辅助机构层**：底盘四轮之外的所有执行机构（现为升降轴 + **夹持机构**：旋转轴 + 夹子 + 车载物料盘 + 装载动作序列） | 状态机迁移、底盘四轮 |
+| `Mycode/auxiliary.c/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合下面两个机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
+| `Mycode/lift_axis.c/.h` | **升降轴层**：T8 丝杆 + Emm_V5 步进闭环（CAN `0x05`）的指令下发、反馈解析、看门狗与到位判断 | 状态机迁移、底盘四轮 |
+| `Mycode/grip_seq.c/.h` | **夹持机构层**：旋转轴 / 夹子 / 车载物料盘三路舵机 + **装载 / 卸载 / 取回**三条动作序列（`GripPhase_t` 状态机） | 状态机迁移、底盘四轮 |
 | `Mycode/nav.c/.h` | **编排层（任务层）**：航段序列 → 逐周期的底盘速度与目标航向（引擎，不含地图数据） | 状态机迁移、直接下发 CAN |
 | `Mycode/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
 | `Mycode/input.c/.h` | **输入汇聚层**：三条串口的硬件配置、DMA 与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ **摁键（自启动，板内自举的唯一入口）** | 帧解析、执行机构、状态机迁移 |
 | `Mycode/vision.c/.h` | **视觉层**：两个视觉模块的帧解析（同一种匿名协议精简帧；视觉1 用 `0xF5` 报物块颜色 + 对准相对距离，视觉2 用 `0xF3` / `0xF4`） | 串口硬件、执行机构、状态机迁移 |
 | `Mycode/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
-| `Mycode/servo.c/.h` | **执行机构（PWM）**：3 路 50Hz 舵机（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8）；**角度语义由 `auxiliary.c` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机） | 状态机迁移、底盘四轮、舵机角度语义 |
+| `Mycode/servo.c/.h` | **执行机构（PWM）**：3 路 50Hz 舵机（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8）；**角度语义由 `grip_seq.c` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机） | 状态机迁移、底盘四轮、舵机角度语义 |
 
 > **目录约定**：底层基础（契约 / 调度 / 显示 / 通用算法）放 `BASE/`，应用层与机构层的新增文件放 `Mycode/`，
 > `APP/` 只保留 `main.c` 与 ST 模板（`stm32f4xx_conf.h`、`stm32f4xx_it.c/.h`）。
@@ -49,7 +51,7 @@
 | 要素 | 内容 | 现状 |
 | --- | --- | --- |
 | **契约** | 地址宏、消息码枚举、消息结构体 —— 集中在 `BASE/contract.h` | 已有 |
-| **节点** | 每个机构 = 一个 `xxx_HandleCmd()` + 一个 `xxx_Step()`，**不新开任务** | 已有（`auxiliary.c` 就是这个形状） |
+| **节点** | 每个机构 = 一个 `xxx_HandleCmd()` + 一个 `xxx_Step()`，**不新开任务** | 已有（`auxiliary.c` 的 `aux_HandleCmd()` / `aux_Step()` 就是这个形状） |
 | **路由** | 一张 `{ 消息码段 → handler }` 注册表 | **已有**（`contract.c` 的 `s_routeTable[]`，`contract_HandleCmd()` 按段查表派发） |
 | **黑板** | 全局 `chassis` 结构体：编排层写目标，模块写状态 | 已有 |
 | **编排** | 任务层 `nav`：决定机构的组合与先后顺序 | **已建**（已接入控制环） |
@@ -105,7 +107,7 @@
 ### 2.5 新增模块的四个动作
 
 1. **申请消息码** —— 在对应段里加一个枚举（`contract.h`）
-2. **实现 handler + step** —— `xxx_HandleCmd()` / `xxx_Step()`，放 `auxiliary.c`（或新建模块文件）
+2. **实现 handler + step** —— `xxx_HandleCmd()` / `xxx_Step()`，**新建设备模块文件**（`Mycode/` 下），再由 `auxiliary.c` 这类接入层聚合
 3. **注册到路由表** —— 在 `contract.c` 的 `s_routeTable[]` 加一行（段基址 + 段掩码 + 该模块的 handler）；不属于任何已注册段的消息会被忽略并累加 `chassis.evtIgnored`
 4. **在 `contract_OnEnter()` 登记状态动作** —— IDLE 失能、FAULT/ESTOP 安全停
    （**与接口无关，这一步一直都要做**）
@@ -259,7 +261,7 @@ Data[7]     保留填 0
 > 脉冲字段单帧最多 `65535` 脉冲 ≈ **41 mm**，走满行程要连发好几条。`0x25` 把单位
 > 换成 0.1 mm，一次到位。
 
-**C 侧控制接口**（`Mycode/auxiliary.c`，两套并存）：
+**C 侧控制接口**（`Mycode/lift_axis.c`，两套并存）：
 
 | 函数 | 单位 | 说明 |
 | --- | --- | --- |
@@ -268,7 +270,7 @@ Data[7]     保留填 0
 | `lift_GetHeightMM()` | mm | 读当前高度 |
 | `lift_MoveTo(clk, dir, vel, acc)` / `lift_MoveBy(delta, vel, acc)` | 脉冲 | 底层接口，mm 接口内部换算后转调它们 |
 
-### 升降轴参数与换算（`auxiliary.h`）
+### 升降轴参数与换算（`lift_axis.h`）
 
 | 字段 / 宏 | 含义 |
 | --- | --- |
@@ -288,12 +290,12 @@ Data[7]     保留填 0
 
 - 速度想按 mm/s 给，用 `LIFT_MMPS_TO_RPM(10)` 换算（导程 2 mm 时 10 mm/s = 300 RPM）。
 - **夹行程只在 `homed = 1`（回零或 `lift_SetZero()` 之后）才有意义**——未回零时零点不在行程最低点。
-- 对外接口（均在 `auxiliary.h` 声明，内部统一用 `can_TxLock/Unlock` 包住发送）：
+- 对外接口（均在 `lift_axis.h` 声明，内部统一用 `can_TxLock/Unlock` 包住发送）：
   `lift_SetEnable()`、`lift_EnableFeedback()`、`lift_ClearOnline()`、`lift_MoveTo()`、`lift_MoveBy()`、
   `lift_MoveToMM()`、`lift_MoveByMM()`、`lift_GetHeightMM()`、`lift_Home()`、`lift_StopNow()`、
   `lift_SetZero()`、`lift_ClearClog()`、`lift_IsMoving()`。
 
-### 夹持机构（`auxiliary.c`，旋转轴 + 夹子 + 车载物料盘）
+### 夹持机构（`grip_seq.c`，旋转轴 + 夹子 + 车载物料盘）
 
 **无水平伸缩机构**：水平那一维没有机构可挂，只能由**底盘全向移动 + 视觉1 距离闭环**代偿
 （落在编排层的对准段）；机构侧只有**升降**（复用升降轴）与**180° 旋转**两个自由度。
@@ -425,12 +427,12 @@ Data[7]     保留填 0
 
 | 要做什么 | 改哪个文件 | 具体位置 |
 | --- | --- | --- |
-| **加新的执行机构**<br>接口不限 CAN：PWM / GPIO / 串口都行 | `auxiliary.c` / `auxiliary.h` | ① `aux_Init()` 初始化<br>② `aux_Step()` 加周期处理<br>③ 在 `contract_OnEnter()` 补该机构的使能 / 失能调用<br>④ 仅当受上位机 **CAN** 指令控制时，才在 `aux_HandleCmd()` 加 `case` |
+| **加新的执行机构**<br>接口不限 CAN：PWM / GPIO / 串口都行 | 新建 `Mycode/xxx.c` / `xxx.h`（照 `lift_axis.c` / `grip_seq.c` 的形状：`xxx_Init()` + `xxx_Step()` + 私有状态） | ① 新模块内实现 `xxx_Init()` / `xxx_Step()`<br>② 由 `auxiliary.c` 的 `aux_Init()` / `aux_Step()` 聚合调用<br>③ 在 `contract_OnEnter()` 补该机构的使能 / 失能调用<br>④ 仅当受上位机 **CAN** 指令控制时，才在 `aux_HandleCmd()` 加 `case` |
 | **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `chassis_drive.c` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
 | **改状态迁移**<br>加新状态、改转移条件 | `contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
 | **改协议**<br>新指令码、新地址 | `contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
 | **改默认路线**<br>动作序列、航段表 | `nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文。⚠ 段类型是 `nav.h` 的 `NavSegType_t`，加新类型要同时改 `nav_SegStep()` |
-| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `auxiliary.h` 的 `GRIP_*` |
+| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `grip_seq.h` 的 `GRIP_*` |
 | **改场地几何**<br>区域位置、尺寸 | `nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav.c` 只做引擎 |
 | **加数据源**<br>第二个相机、新传感器串口 | `input.c` + `vision.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉见 `vision.c` 的 `vision_Step()`）。⚠ `input.c` 另有「摁键」小节，新增通道时不要混进去 |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
@@ -438,7 +440,7 @@ Data[7]     保留填 0
 | **接避障层**<br>反应式优先级抑制 | 新建 `avoid.c`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
 | **改状态屏内容** | `oled.c` | `oled_ShowStatus()` |
 | **换舵机 / 标定行程** | `servo.h` | `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US` |
-| **改夹持机构的角度 / 高度 / 斜坡** | `auxiliary.h` | `GRIP_ROT_*`（三个端点角与斜坡速率）、`GRIP_JAW_*`（开合角）、`GRIP_H_*`（三个高度）、`GRIP_TRAY_*`（物料盘通道 / 三槽位 / 斜坡）、`GRIP_*_TIMEOUT_MS` |
+| **改夹持机构的角度 / 高度 / 斜坡** | `grip_seq.h` | `GRIP_ROT_*`（三个端点角与斜坡速率）、`GRIP_JAW_*`（开合角）、`GRIP_H_*`（三个高度）、`GRIP_TRAY_*`（物料盘通道 / 三槽位 / 斜坡）、`GRIP_*_TIMEOUT_MS` |
 
 ### 场地地图与默认路线（`nav_map.h`）
 
@@ -512,7 +514,7 @@ Data[7]     保留填 0
 | `nav`（编排层） | `nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门**之前**调用；启动由 `contract_OnEnter(CHS_RUNNING)` 里的 `nav_Start()` 触发；姿态环给定经黑板 `chassis.yawTarget` 传递 | **里程计标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号）与**姿态环 PID 参数**——仍是占位值 |
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
 | `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
-| `夹持机构`（`auxiliary.c`） | `aux_Step()` 在编排序列第 1 步调用，内含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_Step()`（装载动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
+| `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
 | **对准 / 装载 / 回零 / 取放段**（`nav.c`） | 五段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD`，在 `nav_SegStep()` 里各自管住超时与重试（后两者共用 `nav_GripStep()`） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据依赖视觉模块 2 的任务码（取不到即判故障） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
@@ -535,7 +537,7 @@ Data[7]     保留填 0
 | `vision`（两个视觉模块） | **两个都已接入**（编排序列第 1 步）：`vision1_Step()` 解析 `0xF5`（颜色 + 对准距离）、`vision_Step()` 解析 `0xF3` / `0xF4`（避障 / 任务码）；`vision_Init()` 在 `ALL_Init()` 归零槽位 | 无。帧解析靠 `input_Read()` 拉字节，须在**任务上下文**调用。⚠ 避障帧 `0xF3` 的数据内容未定稿，`vision_TakeFrame()` 恒返 0，避障层仍无从消费 |
 | `screen`（串口屏协议） | 加 `screen_Step()`（须在**任务上下文**调用——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ 约束是**单向**的：漏接 `screen_Step()` 会让屏上报的字节堆在环形缓冲里；反过来漏接 `input_Step()` 只丢 USART2 通道的 `rxCnt / lockCnt` 诊断（`screen_Step()` 自带在线判断，可独立工作） |
 | `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
-| `servo` | **三路都已由 `auxiliary.c` 的夹持机构接管**（CH1 旋转轴 / CH2 夹子 / CH3 车载物料盘），无需额外接入；标定行程走 `CMD_GRIP_*`（`0x33`~`0x37`）或直接调 `servo_SetPulse()` | 无。⚠ **不要绕过夹持机构直接改这三路的角度** —— 会与旋转轴 / 物料盘斜坡和装载序列打架 |
+| `servo` | **三路都已由 `grip_seq.c` 的夹持机构接管**（CH1 旋转轴 / CH2 夹子 / CH3 车载物料盘），无需额外接入；标定行程走 `CMD_GRIP_*`（`0x33`~`0x37`）或直接调 `servo_SetPulse()` | 无。⚠ **不要绕过夹持机构直接改这三路的角度** —— 会与旋转轴 / 物料盘斜坡和装载序列打架 |
 
 > 新模块的周期处理挂进 `contract_ControlStep()` 的编排序列里；**插入位置由该模块自身的
 > 归位需求决定** —— 需要"每周期都被调用才能自保"的（如 `nav_Step()`）放在闸门之前，
@@ -683,7 +685,7 @@ Data[7]     保留填 0
    `chassis_CheckBraking()` → `nav_Step()` → `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
    新模块的周期处理挂进 `vision_Step()` 之前那一组，不要改动这个顺序。
 2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
-   状态机永远只认"系统级"的事，机构细节全留在 `auxiliary.c`。
+   状态机永远只认"系统级"的事，机构细节全留在各自的机构层文件（`lift_axis.c` / `grip_seq.c`）。
 
 ---
 
