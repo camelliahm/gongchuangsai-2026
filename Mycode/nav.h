@@ -16,6 +16,7 @@ typedef enum {
 	NAV_SEG_ALIGN,		//视觉对准：读视觉1 相对距离微调底盘，value 忽略
 	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value 忽略
 	NAV_SEG_UNLOAD,		//单次卸载：从物料盘第 value 槽取料并放到车外目标区，value = 槽位(1~3)
+	NAV_SEG_RELOAD,		//单次取回：把车外目标区的物料装回物料盘第 value 槽，value = 槽位(1~3)
 } NavSegType_t;
 
 //航段：位移/转角用 value + 符号表达，speed 只对平移段有效
@@ -23,7 +24,7 @@ typedef struct {
 	uint8_t  type;		//NavSegType_t
 	int16_t  value;		//位移(mm) / 转角(0.1 度) / 时长(ms)
 	int16_t  speed;		//平移速度(mm/s)，恒正；转向与停留段忽略
-	uint32_t timeout;	//本段超时(ms)；0 = 用 NAV_SEG_TIMEOUT_MS。转向/对准/装载/回零段应显式给（默认值会提前打断）
+	uint32_t timeout;	//本段超时(ms)；0 = 用 NAV_SEG_TIMEOUT_MS。转向/对准/装载/取放/回零段应显式给（默认值会提前打断）
 } NavSeg_t;
 
 /*---- 导航状态 ----*/
@@ -68,6 +69,9 @@ typedef enum {
 
 /*---- 卸载段（NAV_SEG_UNLOAD）----*/
 #define NAV_UNLOAD_TIMEOUT_MS	(60000u)	//卸载段的段超时(ms)：须覆盖一次完整取放  ⚠ 占位值
+
+/*---- 取回段（NAV_SEG_RELOAD）----*/
+#define NAV_RELOAD_TIMEOUT_MS	(60000u)	//取回段的段超时(ms)：须覆盖一次完整取放  ⚠ 占位值
 
 /*---- 任务码（视觉2 上报，4 组 × 3 位）----*/
 /* 原文为 12 位数字（如 "156123516231"），组间无分隔符，故按固定位序切分而非按 '+'

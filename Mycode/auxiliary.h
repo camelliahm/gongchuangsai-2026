@@ -143,6 +143,12 @@ bool lift_IsMoving(void);
 #define GRIP_H_U_PICK_MM	(GRIP_H_PLACE_MM)	//槽内取料高度(mm)：暂沿用落盘高度  ⚠ 待实测，料落槽后或需再降一个料高
 #define GRIP_H_U_DROP_MM	(GRIP_H_PICK_MM)	//车外放置高度(mm)：暂沿用原料区抓取高度  ⚠ 待实测，粗加工区台面高度或不同
 
+/*---- 取回（把车外目标区的物料装回车上物料盘）----*/
+/* 与装载同向（车外抓取 → 车内落盘），故复用装载的动作阶段，只多一个抓取高度：
+ * 装载在原料区转盘上取，取回在地面圆环里取，两者台面高度不同 */
+
+#define GRIP_H_R_PICK_MM	(GRIP_H_U_DROP_MM)	//圆环取料高度(mm)：暂沿用卸载放置高度  ⚠ 待实测，地面圆环台面高度
+
 #define GRIP_LIFT_VEL		(LIFT_VEL_DEFAULT)	//夹持动作的升降速度(RPM)，沿用升降轴默认
 #define GRIP_LIFT_ACC		(LIFT_ACC_DEFAULT)	//夹持动作的升降加速度(0-255)
 
@@ -183,11 +189,14 @@ typedef struct {
 	uint8_t	 busy;			//1 = 动作序列进行中
 	uint8_t	 fault;			//1 = 本序列因超时 / 被拒绝执行而中断
 	uint8_t	 loadCount;		//已完成的装载轮数（满 GRIP_LOAD_TOTAL 即完成一个原料区）
-	uint8_t	 unloadSlot;		//卸载待取槽位(1~GRIP_TRAY_POS_NUM)
+	uint8_t	 unloadSlot;	//卸载待取槽位(1~GRIP_TRAY_POS_NUM)
+	uint8_t	 traySlot;		//本轮落料槽位(1~GRIP_TRAY_POS_NUM)：装载 = 轮次，取回 = 段指定
+	uint8_t	 seqLoad;		//1 = 装载轮次序列（完成时累计 loadCount）；0 = 取回序列（完成即结束）
 	float	 rotTarget;		//旋转轴目标角(°)（由斜坡逐步逼近）
 	float	 rotNow;		//旋转轴当前角(°)（斜坡中间值，非舵机反馈）
 	float	 trayTarget;	//物料盘目标角(°)（由斜坡逐步逼近）
 	float	 trayNow;		//物料盘当前角(°)（斜坡中间值，非舵机反馈）
+	float	 pickH;			//本轮抓取高度(mm)：装载 = 原料区转盘，取回 = 地面圆环
 	uint32_t phaseTick;		//进入当前阶段的 tick（超时判据）
 } Grip_t;
 
@@ -204,6 +213,10 @@ bool grip_LoadOnce(void);
 /* 启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）；
  * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */
 bool grip_UnloadOnce(uint8_t slot);
+
+/* 启动一次取回（车外目标区取料 → 转 180° 装回物料盘第 slot 槽 → 回安全位）；
+ * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */
+bool grip_ReloadOnce(uint8_t slot);
 
 //中止动作序列（保持已下发的姿态，不改变旋转轴与夹子）
 void grip_Abort(void);

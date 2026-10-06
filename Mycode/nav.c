@@ -11,6 +11,9 @@
 #define NAV_ALIGN_HOLD_CNT	(NAV_ALIGN_HOLD_MS / NAV_CTRL_PERIOD_MS)	//对准保持判据的周期数
 #define NAV_DEG2RAD			(0.01745329252f)	//度 → 弧度
 
+#define NAV_GRIP_FROM_TRAY	(1u)	//取放方向：卸料（物料盘 → 车外目标区）
+#define NAV_GRIP_TO_TRAY	(0u)	//取放方向：取回（车外目标区 → 物料盘）
+
 /*---- 内部状态 ----------------------------------------*/
 
 static struct {
@@ -39,8 +42,8 @@ static struct {
 	uint8_t			retry;			//本段已重试次数（对准与抓取共用该计数）
 	uint32_t		tryTick;		//本次尝试开始的 tick；重试时重置
 
-	//卸载段
-	uint8_t			unloadStarted;	//1 = 本段已发起卸载，等序列走完
+	//卸载 / 取回段
+	uint8_t			gripStarted;	//1 = 本段已发起取放动作，等序列走完
 
 	//任务码（视觉2 上报的 12 位数字，4 组 × 3 位；组序见 nav.h 的 NAV_TASK_G_*）
 	uint8_t			task[NAV_TASK_GROUP_NUM][NAV_TASK_GROUP_LEN];	//各组数字：颜色组为编号 1~6 / 位置组为环号
@@ -455,28 +458,33 @@ static uint8_t nav_LoadStep(void)
 }
 
 /**
- * @brief  卸载段：从物料盘第 slot 槽取料并放到车外目标区，一次一个
- * @param  slot 待取槽位(1~GRIP_TRAY_POS_NUM)，由段值给定
- * @retval 1 = 本次卸载已完成；0 = 进行中或已判故障
+ * @brief  取放段：车外目标区与物料盘之间搬一件，一次一个
+ * @param  slot     物料盘槽位(1~GRIP_TRAY_POS_NUM)，由段值给定
+ * @param  fromTray NAV_GRIP_FROM_TRAY = 卸料（盘 → 车外）；NAV_GRIP_TO_TRAY = 取回（车外 → 盘）
+ * @retval 1 = 本次取放已完成；0 = 进行中或已判故障
  * @note   车须已由上游平移段停在目标区前，本段只管一次取放；
  *         前置条件不满足（状态不符 / 升降轴未回零 / 槽位越界）直接判故障，不重试
  * @author camelliahm
  */
-static uint8_t nav_UnloadStep(uint8_t slot)
+static uint8_t nav_GripStep(uint8_t slot, uint8_t fromTray)
 {
+	bool ok;
+
 	//机构动作期间车必须停稳
 	chassis.vx = 0;
 	chassis.vy = 0;
 
-	if (s_nav.unloadStarted == 0u)
+	if (s_nav.gripStarted == 0u)
 	{
-		if (grip_UnloadOnce(slot) == false)
+		ok = (fromTray != 0u) ? grip_UnloadOnce(slot) : grip_ReloadOnce(slot);
+
+		if (ok == false)
 		{
 			nav_Fault();
 			return 0u;
 		}
 
-		s_nav.unloadStarted = 1u;
+		s_nav.gripStarted = 1u;
 		return 0u;
 	}
 
@@ -524,7 +532,7 @@ static void nav_SegStart(void)
 	s_nav.loadAligned   = 0u;
 	s_nav.loadColored   = 0u;
 	s_nav.colorHold     = 0u;
-	s_nav.unloadStarted = 0u;
+	s_nav.gripStarted = 0u;
 	s_nav.rxSeen        = vision1_GetSlot()->rxCnt;	//以当前帧为基准，免把旧帧当本轮新帧
 
 	//装载的前置条件是升降轴已回零，故进入回零段时触发一次（完成由 aux 侧置 homed）
@@ -553,7 +561,8 @@ static void nav_SegStart(void)
 /**
  * @brief  执行当前航段，本段完成时返回 1
  * @note   转向段只判到位，转角速度由姿态环 PID 产生；平移段按"位移在段方向上的投影"判到位；
- *         回零 / 对准 / 装载三段各自管住自己的重试，段超时只作兜底
+ *         回零 / 对准 / 装载三段各自管住自己的重试，段超时只作兜底；
+ *         卸载 / 取回两段共用一个取放实现，靠方向参数区分
  * @author camelliahm
  */
 static uint8_t nav_SegStep(void)
@@ -604,7 +613,10 @@ static uint8_t nav_SegStep(void)
 		return nav_LoadStep();
 
 	case NAV_SEG_UNLOAD:
-		return nav_UnloadStep((uint8_t)seg->value);
+		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_FROM_TRAY);
+
+	case NAV_SEG_RELOAD:
+		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_TO_TRAY);
 
 	case NAV_SEG_END:
 	default:
@@ -720,7 +732,7 @@ void nav_Init(void)
 	s_nav.retry       = 0u;
 	s_nav.tryTick     = 0u;
 
-	s_nav.unloadStarted = 0u;
+	s_nav.gripStarted = 0u;
 
 	for (i = 0u; i < (uint8_t)NAV_TASK_GROUP_NUM; i++)
 	{

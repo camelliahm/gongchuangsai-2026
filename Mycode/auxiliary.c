@@ -392,12 +392,12 @@ static void grip_Enter(GripPhase_t p)
 	switch (p)
 	{
 	case GRIP_ROT_PICK:    grip_RotTo(GRIP_ROT_PICK_DEG);  break;
-	case GRIP_LOWER_PICK:  grip_LiftTo(GRIP_H_PICK_MM);    break;
+	case GRIP_LOWER_PICK:  grip_LiftTo(grip.pickH);        break;
 	case GRIP_JAW_CLOSE:   grip_SetJaw(true);              break;
 	case GRIP_LIFT_UP:     grip_LiftTo(GRIP_H_SAFE_MM);    break;
-	case GRIP_ROT_PLACE:	//与夹持轴同时起步，两轴并行：本轮槽位 = 已完成轮数 + 1
+	case GRIP_ROT_PLACE:	//与夹持轴同时起步，两轴并行
 		grip_RotTo(GRIP_ROT_PLACE_DEG);
-		grip_TrayTo((uint8_t)(grip.loadCount + 1u));
+		grip_TrayTo(grip.traySlot);
 		break;
 	case GRIP_LOWER_PLACE: grip_LiftTo(GRIP_H_PLACE_MM);   break;
 	case GRIP_JAW_OPEN:    grip_SetJaw(false);             break;
@@ -488,6 +488,9 @@ static void grip_Init(void)
 	grip.fault     = 0u;
 	grip.loadCount = 0u;
 	grip.unloadSlot = 1u;
+	grip.traySlot   = 1u;
+	grip.seqLoad    = 0u;
+	grip.pickH      = GRIP_H_PICK_MM;
 	grip.rotTarget  = GRIP_ROT_SAFE_DEG;
 	grip.rotNow     = GRIP_ROT_SAFE_DEG;
 	grip.trayTarget = GRIP_TRAY_POS1_DEG;
@@ -600,6 +603,12 @@ void grip_Step(void)
 	case GRIP_ROT_SAFE:
 		if (grip_Abs(grip.rotNow - GRIP_ROT_SAFE_DEG) <= GRIP_ROT_TOL_DEG)
 		{
+			if (grip.seqLoad == 0u)
+			{
+				grip_Abort();		//取回是一次性的，不计轮次
+				break;
+			}
+
 			if (grip.loadCount < GRIP_LOAD_TOTAL)
 			{
 				grip.loadCount++;
@@ -753,8 +762,11 @@ bool grip_LoadOnce(void)
 		return false;		//未回零：高度基准不可信，拒绝动作
 	}
 
-	grip.fault = 0u;
-	grip.busy  = 1u;
+	grip.fault    = 0u;
+	grip.busy     = 1u;
+	grip.seqLoad  = 1u;
+	grip.pickH    = GRIP_H_PICK_MM;
+	grip.traySlot = (uint8_t)(grip.loadCount + 1u);
 	grip_Enter(GRIP_ROT_PICK);
 	return true;
 }
@@ -790,6 +802,42 @@ bool grip_UnloadOnce(uint8_t slot)
 	grip.busy       = 1u;
 	grip.unloadSlot = slot;
 	grip_Enter(GRIP_U_ROT_TRAY);
+	return true;
+}
+
+/**
+ * @brief  启动一次取回（车外目标区取料 → 转 180° 装回物料盘第 slot 槽 → 回安全位）
+ * @param  slot 装回槽位(1~GRIP_TRAY_POS_NUM)，与卸料时的槽位一一对应
+ * @retval true = 已启动；false = 前置条件不满足
+ * @note   与 grip_LoadOnce() 同向（车外抓取 → 车内落盘），只是抓取高度取圆环高度、
+ *         且完成时不计装载轮次；车须已由编排层停在目标区前
+ * @author camelliahm
+ */
+bool grip_ReloadOnce(uint8_t slot)
+{
+	if ((chassis.state != CHS_READY) && (chassis.state != CHS_RUNNING))
+	{
+		return false;
+	}
+	if (grip.busy != 0u)
+	{
+		return false;
+	}
+	if (lift.homed == 0u)
+	{
+		return false;		//未回零：高度基准不可信，拒绝动作
+	}
+	if ((slot < 1u) || (slot > (uint8_t)GRIP_TRAY_POS_NUM))
+	{
+		return false;		//槽位越界：编排出错，不猜
+	}
+
+	grip.fault    = 0u;
+	grip.busy     = 1u;
+	grip.seqLoad  = 0u;
+	grip.pickH    = GRIP_H_R_PICK_MM;
+	grip.traySlot = slot;
+	grip_Enter(GRIP_ROT_PICK);
 	return true;
 }
 
