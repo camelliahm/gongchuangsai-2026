@@ -56,6 +56,15 @@ static struct {
 	//任务码（视觉2 上报的 12 位数字，4 组 × 3 位；组序见 nav.h 的 NAV_TASK_G_*）
 	uint8_t			task[NAV_TASK_GROUP_NUM][NAV_TASK_GROUP_LEN];	//各组数字：颜色组为编号 1~6 / 位置组为环号
 	uint8_t			taskGot;					//1 = 4 组已全部解析通过
+
+	//任务统计（上屏用）：抓取 = 装载 + 取回，放置 = 卸料 + 码垛
+	uint8_t			okGet;			//成功完成的抓取动作数
+	uint8_t			okPut;			//成功完成的放置动作数
+	uint8_t			errGet;			//判失败的抓取次数
+	uint8_t			errPut;			//判失败的放置次数
+	uint8_t			cntLoad;		//已计入统计的装载轮数（grip.loadCount 的影子，防重复计数）
+	char			code[VISION_TASK_CODE_MAX];	//任务码原文（上屏用，与 task[][] 同时更新）
+	uint8_t			codeLen;		//任务码有效字符数；0 = 尚未取到
 } s_nav;
 
 /**
@@ -72,11 +81,24 @@ static float nav_WrapDeg(float deg)
 
 /**
  * @brief  本段判故障：投事件并中止导航
- * @note   收敛到 FAULT 由状态机完成，本层不自行复位
+ * @note   收敛到 FAULT 由状态机完成，本层不自行复位；
+ *         取放族的段在这里计入失败次数，其余段（对准超时 / 位号越界）不计
  * @author camelliahm
  */
 static void nav_Fault(void)
 {
+	if ((s_nav.map != NULL) && (s_nav.seg < s_nav.mapNum))
+	{
+		switch (s_nav.map[s_nav.seg].type)
+		{
+		case NAV_SEG_LOAD:
+		case NAV_SEG_RELOAD:	s_nav.errGet++;	break;
+		case NAV_SEG_UNLOAD:
+		case NAV_SEG_STACKED:	s_nav.errPut++;	break;
+		default:								break;
+		}
+	}
+
 	contract_PostEvent(EV_FAULT, 0);
 	nav_Abort();
 }
@@ -262,6 +284,15 @@ static uint8_t nav_ParseTask(const char *code, uint8_t len)
 		}
 	}
 
+	//原文一并留存：上屏显示的是视觉上报的字符串，不是解析后的数字表
+	s_nav.codeLen = 0u;
+	for (i = 0u; (i < len) && (i < (uint8_t)(VISION_TASK_CODE_MAX - 1u)); i++)
+	{
+		s_nav.code[i] = code[i];
+		s_nav.codeLen++;
+	}
+	s_nav.code[s_nav.codeLen] = '\0';
+
 	return (uint8_t)NAV_TASK_GROUP_NUM;
 }
 
@@ -431,6 +462,13 @@ static uint8_t nav_LoadStep(void)
 	chassis.vx = 0;
 	chassis.vy = 0;
 
+	//每完成一轮装载计一次抓取（cntLoad 是本层影子，段入口随 grip_ResetLoad() 清零）
+	if (grip.loadCount > s_nav.cntLoad)
+	{
+		s_nav.okGet  += (uint8_t)(grip.loadCount - s_nav.cntLoad);
+		s_nav.cntLoad = grip.loadCount;
+	}
+
 	if (grip_AllLoaded() == true)
 	{
 		//装满后还有"物料盘归位"的收尾动作，等机构空闲才算本段走完
@@ -559,6 +597,16 @@ static uint8_t nav_GripStep(uint8_t slot, uint8_t mode)
 		return 0u;
 	}
 
+	//本次取放完成：取回算抓取，卸料 / 码垛算放置
+	if (mode == NAV_GRIP_RELOAD)
+	{
+		s_nav.okGet++;
+	}
+	else
+	{
+		s_nav.okPut++;
+	}
+
 	return 1u;
 }
 
@@ -632,6 +680,7 @@ static void nav_SegStart(void)
 		s_nav.loadGroup = (uint8_t)seg->value;
 		nav_TaskOrder();
 		grip_ResetLoad();
+		s_nav.cntLoad   = 0u;		//统计影子与装载计数同步清零
 	}
 
 	//本段位移：平移段直接取段值；目标区横移段按"目标位号 − 当前位号"折算
@@ -874,6 +923,14 @@ void nav_Init(void)
 		}
 	}
 	s_nav.taskGot = 0u;
+
+	s_nav.okGet   = 0u;
+	s_nav.okPut   = 0u;
+	s_nav.errGet  = 0u;
+	s_nav.errPut  = 0u;
+	s_nav.cntLoad = 0u;
+	s_nav.codeLen = 0u;
+	s_nav.code[0] = '\0';
 }
 
 /**
@@ -1002,6 +1059,58 @@ NavState_t nav_GetState(void)
 uint16_t nav_GetSeg(void)
 {
 	return s_nav.seg;
+}
+
+/**
+ * @brief  读任务统计（上屏 / 诊断）
+ * @param  dst 输出结构；为空指针时不动
+ * @author camelliahm
+ */
+void nav_GetStats(NavStats_t *dst)
+{
+	if (dst == NULL)
+	{
+		return;
+	}
+
+	dst->okGet  = s_nav.okGet;
+	dst->okPut  = s_nav.okPut;
+	dst->errGet = s_nav.errGet;
+	dst->errPut = s_nav.errPut;
+}
+
+/**
+ * @brief  读任务码原文（视觉2 上报的数字串）
+ * @param  buf 输出缓冲  max 缓冲容量（含结尾 '\0'）
+ * @retval 拷入的字符数；0 = 尚未取到任务码
+ * @note   原文可能带 '+' 分隔符，原样拷贝；容量不足则截断
+ * @author camelliahm
+ */
+uint8_t nav_GetTaskCode(char *buf, uint8_t max)
+{
+	uint8_t n;
+	uint8_t i;
+
+	if ((buf == NULL) || (max == 0u))
+	{
+		return 0u;
+	}
+
+	buf[0] = '\0';
+
+	if (s_nav.codeLen == 0u)
+	{
+		return 0u;
+	}
+
+	n = (s_nav.codeLen < (uint8_t)(max - 1u)) ? s_nav.codeLen : (uint8_t)(max - 1u);
+	for (i = 0u; i < n; i++)
+	{
+		buf[i] = s_nav.code[i];
+	}
+	buf[n] = '\0';
+
+	return n;
 }
 
 /**

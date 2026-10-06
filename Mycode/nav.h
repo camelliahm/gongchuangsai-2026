@@ -94,6 +94,19 @@ typedef enum {
 #define NAV_TASK_COLOR_MIN	(1u)	//颜色编号下限
 #define NAV_TASK_COLOR_MAX	(6u)	//颜色编号上限
 
+/*---- 任务统计（供上屏：抓取正确次数 / 放置正确次数）----*/
+/* 按动作计：每次夹取成功记一次抓取，每次放置成功记一次放置。
+ * 满载全程 = 装载 6（两批各 3）+ 取回 6 = 12 抓；放粗加工区 6 + 放暂存区 3 + 码垛 3 = 12 放 */
+#define NAV_STAT_GET_TOTAL	(12u)	//全程抓取动作总数（作分母）
+#define NAV_STAT_PUT_TOTAL	(12u)	//全程放置动作总数（作分母）
+
+typedef struct {
+	uint8_t okGet;		//成功完成的抓取动作数
+	uint8_t okPut;		//成功完成的放置动作数
+	uint8_t errGet;		//判失败的抓取次数（重试用尽 / 段超时）
+	uint8_t errPut;		//判失败的放置次数
+} NavStats_t;
+
 void nav_Init(void);
 
 //装订地图（只存指针，调用者须保证生命周期，通常用 static const 表）
@@ -110,6 +123,12 @@ void nav_Step(void);
 
 NavState_t nav_GetState(void);
 uint16_t   nav_GetSeg(void);
+
+//读任务统计（上屏 / 诊断）；dst 为空指针时不动
+void nav_GetStats(NavStats_t *dst);
+
+//读任务码原文（视觉2 上报的数字串）：拷进 buf 并补 '\0'，返回字符数；0 = 尚未取到
+uint8_t nav_GetTaskCode(char *buf, uint8_t max);
 
 //姿态环给定：平移段锁"进入本段时的航向"，转向段推到目标航向
 //驱动层经黑板 chassis.yawTarget 读取；本函数仅供观察调试

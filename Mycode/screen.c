@@ -393,6 +393,118 @@ uint16_t screen_Page(uint8_t pageId)
 	return screen_TxFlush(&tx);
 }
 
+/*---- 上屏内容 ----------------------------------------------------*/
+
+/**
+ * @brief  把无符号数按十进制追加到字符串缓冲
+ * @param  buf 缓冲  len 当前长度（原地更新）  max 缓冲容量（含结尾 '\0'）
+ * @param  v   待追加的数值
+ * @note   缓冲不足即截断，不进位不报错
+ * @author camelliahm
+ */
+static void screen_AppendU32(char *buf, uint8_t *len, uint8_t max, uint32_t v)
+{
+	char    tmp[11];
+	uint8_t n = 0u;
+
+	do
+	{
+		tmp[n] = (char)('0' + (char)(v % 10u));
+		n++;
+		v /= 10u;
+	} while ((v != 0u) && (n < (uint8_t)sizeof(tmp)));
+
+	while ((n > 0u) && (*len < (uint8_t)(max - 1u)))
+	{
+		n--;
+		buf[*len] = tmp[n];
+		(*len)++;
+	}
+}
+
+/**
+ * @brief  把"分子/分母"格式化进缓冲
+ * @param  buf 缓冲  max 缓冲容量（含结尾 '\0'）  a 分子  b 分母
+ * @note   缓冲不足即截断，不到 2 位就只写分母
+ * @author camelliahm
+ */
+static void screen_FormatNumNum(char *buf, uint8_t max, uint32_t a, uint32_t b)
+{
+	uint8_t len = 0u;
+
+	screen_AppendU32(buf, &len, max, a);
+	if (len < (uint8_t)(max - 1u))
+	{
+		buf[len] = '/';
+		len++;
+	}
+	screen_AppendU32(buf, &len, max, b);
+	buf[len] = '\0';
+}
+
+/**
+ * @brief  任务码上屏
+ * @param  code 视觉上报的任务码原文（不校验内容，原样显示）；空指针按空串处理
+ * @note   阻塞式发送，须在任务上下文调用
+ * @author camelliahm
+ */
+void screen_ShowTask(const char *code)
+{
+	if (code == NULL)
+	{
+		code = "";
+	}
+
+	(void)screen_Text(SCREEN_OBJ_TASK, code);
+}
+
+/**
+ * @brief  抓取次数上屏
+ * @param  ok 抓取成功次数  tot 抓取动作总数（分母）
+ * @note   阻塞式发送，须在任务上下文调用
+ * @author camelliahm
+ */
+void screen_ShowGet(uint8_t ok, uint8_t tot)
+{
+	char buf[24];
+
+	screen_FormatNumNum(buf, (uint8_t)sizeof(buf), ok, tot);
+	(void)screen_Text(SCREEN_OBJ_GET, buf);
+}
+
+/**
+ * @brief  放置次数上屏
+ * @param  ok 放置成功次数  tot 放置动作总数（分母）
+ * @note   阻塞式发送，须在任务上下文调用
+ * @author camelliahm
+ */
+void screen_ShowPut(uint8_t ok, uint8_t tot)
+{
+	char buf[24];
+
+	screen_FormatNumNum(buf, (uint8_t)sizeof(buf), ok, tot);
+	(void)screen_Text(SCREEN_OBJ_PUT, buf);
+}
+
+/**
+ * @brief  失败次数上屏
+ * @param  errGet 抓取失败次数  errPut 放置失败次数
+ * @note   阻塞式发送，须在任务上下文调用；SCREEN_SHOW_ERR 为 0 时只吞参数不发帧
+ * @author camelliahm
+ */
+void screen_ShowErr(uint8_t errGet, uint8_t errPut)
+{
+#if (SCREEN_SHOW_ERR != 0u)
+	char buf[24];
+
+	screen_FormatNumNum(buf, (uint8_t)sizeof(buf), errGet, errPut);
+	(void)screen_Text(SCREEN_OBJ_ERR, buf);
+#else
+	(void)errGet;
+	(void)errPut;
+#endif
+}
+
 /**
  * @brief  取走一个事件
  * @param  dst 目标结构

@@ -26,6 +26,28 @@ uint16_t screen_Text(const char *obj, const char *txt);
 uint16_t screen_Num(const char *obj, int32_t val);
 uint16_t screen_Page(uint8_t pageId);
 
+/*---- 上屏内容（任务码 / 任务统计）----*/
+/* ⚠ 下面四个控件名是占位值：按 TJC 工程里的实际控件名改这里即可，代码不必动 */
+
+#define SCREEN_OBJ_TASK		"t0"	//任务码文本框控件名
+#define SCREEN_OBJ_GET		"t1"	//抓取次数文本框控件名，显示"成功/总数"
+#define SCREEN_OBJ_PUT		"t2"	//放置次数文本框控件名，显示"成功/总数"
+#define SCREEN_OBJ_ERR		"t3"	//失败次数文本框控件名，显示"抓错/放错"
+#define SCREEN_SHOW_ERR		(1u)	//1 = 上屏失败次数；屏上没有该控件时置 0
+
+/* ⚠ 下面四个函数各发一条屏指令（阻塞约 6 ms），需要摊开时由调用方一次调一个 */
+//任务码上屏：原文照抄（如 "156123516231"）；空指针按空串处理
+void screen_ShowTask(const char *code);
+
+//抓取次数上屏：显示"成功/总数"
+void screen_ShowGet(uint8_t ok, uint8_t tot);
+
+//放置次数上屏：显示"成功/总数"
+void screen_ShowPut(uint8_t ok, uint8_t tot);
+
+//失败次数上屏：显示"抓错/放错"；SCREEN_SHOW_ERR 为 0 时本函数空转
+void screen_ShowErr(uint8_t errGet, uint8_t errPut);
+
 //屏上报的事件帧起始码
 #define SCREEN_EV_TOUCH		(0x65u)		//控件点击：页面ID + 控件ID + 触摸事件
 #define SCREEN_EV_PAGE		(0x66u)		//当前页面ID：发 sendme 后返回

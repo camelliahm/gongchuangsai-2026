@@ -167,7 +167,7 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | --- | --- | --- |
 | 1 | `board_init()` | 硬件初始化（NVIC、时钟、GPIO、CAN） |
 | 2 | `servo_Init()` | 三路舵机 PWM（TIM3 CH1~CH3）— 三路语义都已由夹持机构下发（旋转轴 / 夹子 / 车载物料盘） |
-| 3 | `input_Init()` | 三条串口（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ 摁键 GPIO；**只配硬件与字节管道，不做任何帧解析** — ⚠ 两个视觉模块的解析都已接入（`vision1_Step()` / `vision_Step()`），串口屏仍未接入 |
+| 3 | `input_Init()` | 三条串口（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ 摁键 GPIO；**只配硬件与字节管道，不做任何帧解析** — 三条通道的解析都已接入（`vision1_Step()` / `vision_Step()` / `screen_Step()`） |
 | 4 | `vision_Init()` | 视觉 1 / 2 的帧槽位与组帧状态归零（须在 `input_Init()` 之后） |
 | 5 | `screen_Init()` | 串口屏上报事件槽位与收帧状态归零（USART2 硬件在 `input_Init()`） |
 | 6 | `oled_Init()` | OLED 状态屏（软件 I2C）— ⚠ 未接入控制环 |
@@ -183,7 +183,7 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | --- | --- | --- | --- | --- |
 | `CTRL` | 4 | 512 | `contract_CtrlTask` | 5 ms 绝对节拍，每拍调 `contract_ControlStep()` |
 | `CAN_RX` | 3 | 256 | `contract_CanRecvTask` | 阻塞 `can_RecvFrame()` 取帧 → `contract_HandleFrame()` 分流 |
-| `STATE` | 2 | 256 | `contract_StateTask` | 阻塞等事件 → `contract_Step()` 查表迁移 |
+| `STATE` | 2 | 256 | `contract_StateTask` | 带超时等事件 → `contract_Step()` 查表迁移；超时走 `contract_UiStep()` 刷屏 |
 
 急停为什么快：`CAN_RX` 优先级高于 `STATE`，帧一到就抢占运行，投完事件 `STATE`
 立即就绪；`CTRL` 每 5 ms 只占极短时间。最坏等待 = 一次控制脉冲（几十 µs 量级）。
@@ -537,9 +537,9 @@ Data[7]     保留填 0
 
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
-| `input`（三条串口 + 摁键） | `input_Init()` 只配硬件与字节管道；`input_Step()` **已接入**（编排序列第 1 步） | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。⚠ 串口屏通道的字节仍无人取用，`lockCnt` 会持续增长 |
+| `input`（三条串口 + 摁键） | `input_Init()` 只配硬件与字节管道；`input_Step()` **已接入**（编排序列第 1 步） | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。三条通道的字节均有消费方（`screen_Step()` 已接） |
 | `vision`（两个视觉模块） | **两个都已接入**（编排序列第 1 步）：`vision1_Step()` 解析 `0xF5`（颜色 + 对准距离）、`vision_Step()` 解析 `0xF3` / `0xF4`（避障 / 任务码）；`vision_Init()` 在 `ALL_Init()` 归零槽位 | 无。帧解析靠 `input_Read()` 拉字节，须在**任务上下文**调用。⚠ 避障帧 `0xF3` 的数据内容未定稿，`vision_TakeFrame()` 恒返 0，避障层仍无从消费 |
-| `screen`（串口屏协议） | 加 `screen_Step()`（须在**任务上下文**调用——它靠 `input_Read(INPUT_SCREEN)` 拉字节） | ⚠ 约束是**单向**的：漏接 `screen_Step()` 会让屏上报的字节堆在环形缓冲里；反过来漏接 `input_Step()` 只丢 USART2 通道的 `rxCnt / lockCnt` 诊断（`screen_Step()` 自带在线判断，可独立工作） |
+| `screen`（串口屏协议） | **已接入**：`screen_Step()` 收屏上报（编排序列第 1 步）；上屏（任务码 / 任务统计）走 `screen_ShowTask()` / `screen_ShowGet()` / `screen_ShowPut()` / `screen_ShowErr()`，**调用点在 STATE 任务**（`contract_UiStep()`）—— 屏指令是阻塞发送（115200 下最长约 6 ms），**不能放进 5 ms 控制环**；且**每个 200 ms 超时周期最多发一条**，把连发阻塞摊到多个周期。⚠ 控件名宏 `SCREEN_OBJ_*` 是**占位值**，按 TJC 工程实际控件名改 | 屏上报的字节经 `input_Read(INPUT_SCREEN)` 拉取，须在**任务上下文**调用 |
 | `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
 | `servo` | **三路都已由 `grip_seq.c` 的夹持机构接管**（CH1 旋转轴 / CH2 夹子 / CH3 车载物料盘），无需额外接入；标定行程走 `CMD_GRIP_*`（`0x33`~`0x37`）或直接调 `servo_SetPulse()` | 无。⚠ **不要绕过夹持机构直接改这三路的角度** —— 会与旋转轴 / 物料盘斜坡和装载序列打架 |
 
@@ -704,7 +704,7 @@ Data[7]     保留填 0
 
 1. **`contract_ControlStep()` 不许塞算法。** 它是骨架编排，只负责按顺序调用别人：
    `chassis_DriveWatchdog()` → `aux_Step()` → `input_Step()` → `vision1_Step()` → `vision_Step()` →
-   `chassis_CheckBraking()` → `nav_Step()` → `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
+   `screen_Step()` → `chassis_CheckBraking()` → `nav_Step()` → `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
    新模块的周期处理挂进 `vision_Step()` 之前那一组，不要改动这个顺序。
 2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
    状态机永远只认"系统级"的事，机构细节全留在各自的机构层文件（`lift_axis.c` / `grip_seq.c`）。

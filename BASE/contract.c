@@ -4,6 +4,7 @@
 #include "nav.h"
 #include "input.h"
 #include "vision.h"
+#include "screen.h"
 #include "can.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -18,6 +19,15 @@ __IO Chassis_t chassis;	//全局黑板：跨层共享的底盘状态
 
 //事件队列：事件稀疏，8 条足够
 #define CHASSIS_EVT_QUEUE_LEN	(8)	//状态机事件队列深度
+
+//上屏节拍：屏指令是阻塞发送（115200 下最长约 6 ms），不能落在 5 ms 控制环上
+#define CHASSIS_UI_PERIOD_MS	(200u)	//STATE 任务的等待超时，兼作上屏刷新周期
+
+//待上屏项：一个刷新周期只发一条，把连发的阻塞摊到多个周期
+#define UI_PEND_TASK			(1u << 0)	//任务码待上屏
+#define UI_PEND_GET				(1u << 1)	//抓取次数待上屏
+#define UI_PEND_PUT				(1u << 2)	//放置次数待上屏
+#define UI_PEND_ERR				(1u << 3)	//失败次数待上屏
 
 typedef struct {
 	ChassisEvent_t ev;	//事件码
@@ -376,9 +386,119 @@ void contract_CanRecvTask(void *pvParameters)
 }
 
 /**
+ * @brief  比较两个字符串是否相同（不引入 string 库）
+ * @param  a 字符串一  b 字符串二
+ * @retval 1 = 相同
+ * @author camelliahm
+ */
+static uint8_t contract_StrSame(const char *a, const char *b)
+{
+	while ((*a != '\0') && (*a == *b))
+	{
+		a++;
+		b++;
+	}
+
+	return (*a == *b) ? 1u : 0u;
+}
+
+/**
+ * @brief  上屏刷新：与屏上当前内容比较，有差异才登记；每个周期最多发一条
+ * @note   只在本任务上下文调用。屏指令是阻塞发送（115200 下最长约 6 ms），
+ *         故不放进 5 ms 控制环；连发多条会拖住事件消费，故摊到多个超时周期
+ * @author camelliahm
+ */
+static void contract_UiStep(void)
+{
+	static uint8_t    inited;							//1 = 初值已上屏过
+	static uint8_t    pend;								//待上屏项位图（UI_PEND_*）
+	static char       pendCode[VISION_TASK_CODE_MAX];	//待上屏的任务码
+	static NavStats_t pendStat;							//待上屏的统计
+	static char       lastCode[VISION_TASK_CODE_MAX];	//屏上当前的任务码
+	static NavStats_t lastStat;							//屏上当前的统计
+	char              code[VISION_TASK_CODE_MAX];
+	NavStats_t        st;
+	uint8_t           n;
+	uint8_t           i;
+
+	nav_GetStats(&st);
+	n = nav_GetTaskCode(code, (uint8_t)sizeof(code));
+
+	//与屏上值比较：有差异才登记；首次无条件登记，把 0/12 的初值刷上去
+	//没有任务码时不动，避免把屏上已有显示清空
+	if ((n > 0u) && (contract_StrSame(code, lastCode) == 0u))
+	{
+		for (i = 0u; i < (uint8_t)sizeof(pendCode); i++)
+		{
+			pendCode[i] = code[i];
+			if (code[i] == '\0')
+			{
+				break;
+			}
+		}
+		pend |= UI_PEND_TASK;
+	}
+
+	if ((inited == 0u) || (st.okGet != lastStat.okGet))
+	{
+		pendStat.okGet = st.okGet;
+		pend |= UI_PEND_GET;
+	}
+	if ((inited == 0u) || (st.okPut != lastStat.okPut))
+	{
+		pendStat.okPut = st.okPut;
+		pend |= UI_PEND_PUT;
+	}
+	if ((inited == 0u) || (st.errGet != lastStat.errGet) || (st.errPut != lastStat.errPut))
+	{
+		pendStat.errGet = st.errGet;
+		pendStat.errPut = st.errPut;
+		pend |= UI_PEND_ERR;
+	}
+
+	inited = 1u;
+
+	//每周期只发一条：任务码 → 抓取 → 放置 → 失败；发完即记屏上现状并清位
+	if ((pend & UI_PEND_TASK) != 0u)
+	{
+		screen_ShowTask(pendCode);
+
+		for (i = 0u; i < (uint8_t)sizeof(lastCode); i++)
+		{
+			lastCode[i] = pendCode[i];
+			if (pendCode[i] == '\0')
+			{
+				break;
+			}
+		}
+		pend &= (uint8_t)~UI_PEND_TASK;
+	}
+	else if ((pend & UI_PEND_GET) != 0u)
+	{
+		screen_ShowGet(pendStat.okGet, (uint8_t)NAV_STAT_GET_TOTAL);
+		lastStat.okGet = pendStat.okGet;
+		pend &= (uint8_t)~UI_PEND_GET;
+	}
+	else if ((pend & UI_PEND_PUT) != 0u)
+	{
+		screen_ShowPut(pendStat.okPut, (uint8_t)NAV_STAT_PUT_TOTAL);
+		lastStat.okPut = pendStat.okPut;
+		pend &= (uint8_t)~UI_PEND_PUT;
+	}
+	else if ((pend & UI_PEND_ERR) != 0u)
+	{
+		screen_ShowErr(pendStat.errGet, pendStat.errPut);
+		lastStat.errGet = pendStat.errGet;
+		lastStat.errPut = pendStat.errPut;
+		pend &= (uint8_t)~UI_PEND_ERR;
+	}
+}
+
+/**
  * @brief  状态机任务
  * @param  pvParameters 未使用
- * @note   阻塞在事件队列上，无事件时不占 CPU
+ * @note   带超时等事件队列：超时与事件两条路都汇到上屏刷新，故本任务兼作低速后台。
+ *         优先级最低，不影响 5 ms 控制节拍
  * @author camelliahm
  */
 void contract_StateTask(void *pvParameters)
@@ -389,10 +509,12 @@ void contract_StateTask(void *pvParameters)
 
 	for (;;)
 	{
-		if (xQueueReceive(s_evtQueue, &msg, portMAX_DELAY) == pdPASS)
+		if (xQueueReceive(s_evtQueue, &msg, pdMS_TO_TICKS(CHASSIS_UI_PERIOD_MS)) == pdPASS)
 		{
 			contract_Step(msg.ev, msg.param);
 		}
+
+		contract_UiStep();
 	}
 }
 
@@ -410,6 +532,7 @@ void contract_ControlStep(void)
 	input_Step();  //（按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志
 	vision1_Step();  //视觉模块 1 帧解析（物块颜色 + 对准相对距离）
 	vision_Step();  //视觉模块 2 帧解析（二维码任务码 / 避障列表）
+	screen_Step();  //串口屏上报帧解析（USART2；只收不阻塞，发送在 STATE 任务里）
 
 	//2. 停车过程的停稳判断（可能投递 EV_ARRIVED）
 	chassis_CheckBraking();
