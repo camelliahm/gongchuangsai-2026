@@ -22,7 +22,11 @@
 | `DEVICE/input.c/.h` | **输入汇聚层**：三条串口的硬件配置、DMA 与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ **摁键（自启动，板内自举的唯一入口）** | 帧解析、执行机构、状态机迁移 |
 | `DEVICE/vision.c/.h` | **视觉层**：两个视觉模块的帧解析（同一种匿名协议精简帧；视觉1 用 `0xF5` 报物块颜色 + 对准相对距离，视觉2 用 `0xF3` / `0xF4`） | 串口硬件、执行机构、状态机迁移 |
 | `DEVICE/servo.c/.h` | **执行机构（PWM）**：3 路 50Hz 舵机（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8）；**角度语义由 `grip_seq.c` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机） | 状态机迁移、底盘四轮、舵机角度语义 |
-| `APP_LOG/nav.c/.h` | **编排层（任务层）**：航段序列 → 逐周期的底盘速度与目标航向（引擎，不含地图数据） | 状态机迁移、直接下发 CAN |
+| `APP_LOG/nav.c/.h` | **编排层（任务层）· 调度与入口**：航段序列驱动、段起点与判据复位、超时重试、对外接口（引擎部分） | 段内控制律、地图数据 |
+| `APP_LOG/nav_priv.h` | **nav 内部头**：`s_nav` 状态结构、内部宏、跨文件函数原型（仅供 `nav*.c` 使用） | 对外接口（在 `nav.h`） |
+| `APP_LOG/nav_seg.c` | **编排层 · 航段实现**：平移 / 横移到位判据、对准段、装载段、取放段 | 状态机迁移、地图数据 |
+| `APP_LOG/nav_align.c` | **编排层 · 对准与挑色**：视觉1 闭环对准、任务码解析、目标色 / 位号查询 | 状态机迁移、直接下发 CAN |
+| `APP_LOG/nav_util.c` | **编排层 · 工具与读接口**：角度折算、绝对值、`nav_Load` / `nav_GetState` / `nav_GetStats` / `nav_GetTaskCode` 等只读接口 | 控制律、状态迁移 |
 | `APP_LOG/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
 | `IFACE/auxiliary.c/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合 `DEVICE/` 下机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
 | `IFACE/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
@@ -433,8 +437,8 @@ Data[7]     保留填 0
 | **改状态迁移**<br>加新状态、改转移条件 | `CONTRACT/contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
 | **改协议**<br>新指令码、新地址 | `CONTRACT/contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
 | **改默认路线**<br>动作序列、航段表 | `APP_LOG/nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文。⚠ 段类型是 `nav.h` 的 `NavSegType_t`，加新类型要同时改 `nav_SegStep()` |
-| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `APP_LOG/nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `grip_seq.h` 的 `GRIP_*` |
-| **改场地几何**<br>区域位置、尺寸 | `APP_LOG/nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav.c` 只做引擎 |
+| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `APP_LOG/nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav_align.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav.c` 的 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `grip_seq.h` 的 `GRIP_*` |
+| **改场地几何**<br>区域位置、尺寸 | `APP_LOG/nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav*.c` 只做引擎 |
 | **加数据源**<br>第二个相机、新传感器串口 | `input.c` + `vision.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉见 `vision.c` 的 `vision_Step()`）。⚠ `input.c` 另有「摁键」小节，新增通道时不要混进去 |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
 | **改摁键引脚 / 延时**<br>换脚、换成板载键、改倒计时 | `input.h` | `KEY_PORT` 与 `KEY_CLK` 必须同步改，再改 `KEY_PIN`；有效电平改 `KEY_ACTIVE_LOW`；时序与接线见下文「摁键自启动」 |
@@ -447,7 +451,7 @@ Data[7]     保留填 0
 
 `APP_LOG/nav_map.h` 是**智能搬运初赛赛场的地图文件**（纯数据，无逻辑），取自
 `DOC/07_智能搬运赛项命题要求.md` 与「图 1 初赛赛场示意图」；**场地几何与默认路线表都在该文件**，
-`nav.c` 只保留引擎逻辑。
+`nav*.c` 只保留引擎逻辑。
 
 - **坐标系**：原点 = 场地左上角（俯视，与图 1 同向），+X 向右，+Y 向下，单位 mm。
   它与里程计坐标系（上电点为原点、随车体）**不是一个东西**；两者的换算取决于上电摆放位姿。
@@ -520,7 +524,7 @@ Data[7]     保留填 0
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
 | `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
 | `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
-| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav.c`） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
+| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
@@ -569,7 +573,7 @@ Data[7]     保留填 0
 >
 > 消费方是编排层的**对准段**（`NAV_SEG_ALIGN`）与**装载段的挑色步**（`NAV_SEG_LOAD` 每轮先比 `color` 与任务码目标色），见下节。
 
-### 原料区动作：回零 / 对准 / 装载三个航段（`nav.c`）
+### 原料区动作：回零 / 对准 / 装载三个航段（`nav_seg.c` + `nav_align.c`）
 
 原料区那两段（默认路线 06·07·08 与 37·38·39，两批各一次）由**三个新段类型**承载，
 都是"车停原地、只动机构或只微调底盘"：
@@ -603,7 +607,7 @@ Data[7]     保留填 0
 - ⚠ **段超时字段是 `uint32_t`**：一轮装载按当前的 `LIFT_VEL_DEFAULT`（300 RPM = 10 mm/s）估算
   约 40 s，三轮"等色 + 对准 + 动作"已远超 `uint16_t` 的 65.5 s 上限（现给 240 s）。抬高升降速度后可以调小这些常量。
 
-### 目标区动作：横移 + 卸料 / 取回 / 码垛（`nav.c`）
+### 目标区动作：横移 + 卸料 / 取回 / 码垛（`nav_seg.c`）
 
 车外目标区（粗加工区 / 暂存区）的动作分两类：**横移对准**（底盘）与**取放**（机构），
 各自占一个段类型，同名段可重复出现（**每件一个段**）：

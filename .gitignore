@@ -8,13 +8,21 @@
 /APP/*
 !/APP/main.c
 
-# 底层基础（公共契约 / 状态机调度 / 显示 / 通用算法）
-!/BASE/
+# 契约与调度层（契约 / 状态机 / 显示 / 通用算法）
+!/CONTRACT/
+
+# 硬件抽象与机构执行层
+!/DEVICE/
+
+# 应用决策层（虚拟上位机 nav）
+!/APP_LOG/
+
+# 接入与人机层（auxiliary / screen）
+!/IFACE/
 
 # 自研应用层与 RTOS
 !/BSP/
 !/FreeRTOS/
-!/Mycode/
 
 # 编辑器配置：只纳入 IntelliSense / 调试 / 任务相关的必要配置
 !/.vscode/
