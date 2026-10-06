@@ -3,8 +3,10 @@
         {
             "name": "V1.0",
             "includePath": [
-                "${workspaceFolder}/BASE",
-                "${workspaceFolder}/Mycode",
+                "${workspaceFolder}/CONTRACT",
+                "${workspaceFolder}/DEVICE",
+                "${workspaceFolder}/APP_LOG",
+                "${workspaceFolder}/IFACE",
                 "${workspaceFolder}/APP",
                 "${workspaceFolder}/BSP",
                 "${workspaceFolder}/CMSIS",
