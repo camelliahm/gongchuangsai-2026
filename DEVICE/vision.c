@@ -41,6 +41,7 @@ void vision_Init(void)
 	visionSlot.errCnt       = 0u;
 	visionSlot.obstFresh    = 0u;
 	visionSlot.count        = 0u;
+	visionSlot.obst[0].x    = 0;
 	visionSlot.taskFresh    = 0u;
 	visionSlot.task.len     = 0u;
 	visionSlot.task.code[0] = '\0';
@@ -246,6 +247,27 @@ static void vision_OnTask(const uint8_t *data, uint8_t len)
 }
 
 /**
+ * @brief  把一帧避障数据存入槽位
+ * @param  data 数据内容起始  len 数据内容长度
+ * @note   视觉只报横向偏移，收到本帧即代表障碍存在；纵向距离由视觉侧不提供，
+ *         避障层靠"帧超时"判断障碍消失
+ * @author camelliahm
+ */
+static void vision_OnObst(const uint8_t *data, uint8_t len)
+{
+	if (len != VISION_OBST_DATA_LEN)
+	{
+		visionSlot.errCnt++;
+		return;
+	}
+
+	//单帧单条：横向偏移 int16 小端，正 = 障碍在车前方偏左
+	visionSlot.obst[0].x = (int16_t)((uint16_t)data[0] | ((uint16_t)data[1] << 8));
+	visionSlot.count     = 1u;
+	visionSlot.obstFresh = 1u;
+}
+
+/**
  * @brief  校验并把一帧视觉2 数据分发给对应槽位
  * @param  f 长度为 LEN+5 的完整帧，f[0] = 帧头
  * @note   校验不过只计数，不进槽位
@@ -268,7 +290,8 @@ static void vision2_OnFrame(const uint8_t *f)
 		break;
 
 	case VISION_ID_OBST:
-		break;					//数据内容未定：只计帧数，不解析
+		vision_OnObst(&f[3], len);
+		break;
 
 	default:
 		visionSlot.errCnt++;	//功能码未定义
@@ -324,7 +347,7 @@ static void vision2_Online(void)
 
 /**
  * @brief  视觉模块 2 周期处理：收帧 + 校验 + 刷新在线标志
- * @note   须与 input_Step() 一样每周期调用；当前仍无调用点（未接入控制环）
+ * @note   须与 input_Step() 一样每周期调用
  * @author camelliahm
  */
 void vision_Step(void)
@@ -337,7 +360,8 @@ void vision_Step(void)
  * @brief  取走一帧避障数据
  * @param  dst 目标缓冲（须至少有 max 条容量）  max 缓冲区可容纳条数
  * @retval 实际拷贝的条数；0 = 无新帧
- * @note   避障帧的数据内容未定，当前不会置 obstFresh，故恒返回 0
+ * @note   取后清 obstFresh，故同一帧只会被消费一次；
+ *         障碍是否仍存在由调用方按"距上次取帧的时长"判断
  * @author camelliahm
  */
 uint8_t vision_TakeFrame(VisionObst_t *dst, uint8_t max)

@@ -124,6 +124,9 @@ void nav_Step(void);
 NavState_t nav_GetState(void);
 uint16_t   nav_GetSeg(void);
 
+//读当前航段类型（NavSegType_t）；越界时返回 NAV_SEG_END
+uint8_t nav_GetSegType(void);
+
 //读任务统计（上屏 / 诊断）；dst 为空指针时不动
 void nav_GetStats(NavStats_t *dst);
 

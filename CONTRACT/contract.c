@@ -2,6 +2,7 @@
 #include "chassis_drive.h"
 #include "auxiliary.h"
 #include "nav.h"
+#include "avoid.h"
 #include "input.h"
 #include "vision.h"
 #include "screen.h"
@@ -9,6 +10,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#include "oled.h"
 
 //底盘应用层：状态机 + 系统级调度（不含控制算法），详见工程根目录 README.md
 
@@ -286,6 +288,7 @@ void contract_Init(void)
 
 	chassis_DriveInit();	//四轮槽位、里程计、姿态环 PID
 	aux_Init();				//升降轴槽位
+	avoid_Init();			//避障层状态
 }
 
 /**
@@ -515,6 +518,7 @@ void contract_StateTask(void *pvParameters)
 		}
 
 		contract_UiStep();
+		oled_Step();
 	}
 }
 
@@ -541,7 +545,11 @@ void contract_ControlStep(void)
 	 *    放在闸门之前是必须的 —— 它的归位逻辑靠"每周期都被调用"才能生效 */
 	nav_Step();
 
-	//4. 按状态驱动底盘
+	/* 4. 避障叠加：必须在 nav_Step() 之后 —— 本层只往 vx 上加让行分量，
+	 *    靠"后写"压过导航本周期算出的横向速度，故顺序不能颠倒 */
+	avoid_Step();
+
+	//5. 按状态驱动底盘
 	if (chassis.state == CHS_RUNNING)
 	{
 		chassis_DriveStep();	//里程计 → 逆运动学 → 姿态环 → 下发四轮

@@ -28,11 +28,12 @@
 | `APP_LOG/nav_align.c` | **编排层 · 对准与挑色**：视觉1 闭环对准、任务码解析、目标色 / 位号查询 | 状态机迁移、直接下发 CAN |
 | `APP_LOG/nav_util.c` | **编排层 · 工具与读接口**：角度折算、绝对值、`nav_Load` / `nav_GetState` / `nav_GetStats` / `nav_GetTaskCode` 等只读接口 | 控制律、状态迁移 |
 | `APP_LOG/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
+| `APP_LOG/avoid.c/.h` | **避障层**：读视觉2 的障碍横向偏移，**在 `nav_Step()` 之后**往黑板 `chassis.vx` 上叠加让行分量（只叠加不覆盖） | 状态机迁移、航段序列、直接下发 CAN |
 | `IFACE/auxiliary.c/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合 `DEVICE/` 下机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
 | `IFACE/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
 
 > **目录约定**：自研代码按四层分目录 —— `CONTRACT/`（契约 / 调度 / 显示 / 通用算法）、`DEVICE/`（硬件抽象与机构执行）、
-> `APP_LOG/`（应用决策，即虚拟上位机 `nav`）、`IFACE/`（接入与人机：`auxiliary` / `screen`）。
+> `APP_LOG/`（应用决策，即虚拟上位机 `nav` / 避障层 `avoid`）、`IFACE/`（接入与人机：`auxiliary` / `screen`）。
 > `APP/` 只保留 `main.c` 与 ST 模板（`stm32f4xx_conf.h`、`stm32f4xx_it.c/.h`）。
 
 三层之间**不直接互相调用**，通过两条通道交互：
@@ -175,10 +176,10 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | 3 | `input_Init()` | 三条串口（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ 摁键 GPIO；**只配硬件与字节管道，不做任何帧解析** — 三条通道的解析都已接入（`vision1_Step()` / `vision_Step()` / `screen_Step()`） |
 | 4 | `vision_Init()` | 视觉 1 / 2 的帧槽位与组帧状态归零（须在 `input_Init()` 之后） |
 | 5 | `screen_Init()` | 串口屏上报事件槽位与收帧状态归零（USART2 硬件在 `input_Init()`） |
-| 6 | `oled_Init()` | OLED 状态屏（软件 I2C）— ⚠ 未接入控制环 |
+| 6 | `oled_Init()` | OLED 状态屏（软件 I2C）；周期刷新由 STATE 任务调 `oled_Step()` |
 | 7 | `nav_Init()` | 编排层：装载默认地图，不自动启动（启动由进入 RUNNING 触发） |
 | 8 | `can_RtosInit()` | 建 CAN 接收队列 + 发送互斥锁 |
-| 9 | `contract_Init()` | 建事件队列 → `chassis_DriveInit()` + `aux_Init()` |
+| 9 | `contract_Init()` | 建事件队列 → `chassis_DriveInit()` + `aux_Init()` + `avoid_Init()` |
 | 10 | `App_TaskCreate()` | 按任务表 `s_tasks[]` 建任务 |
 
 第 1 项须最先执行 —— 后序模块的时钟与 GPIO 由它打开；第 8~10 项须在建任务之前
@@ -188,7 +189,7 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | --- | --- | --- | --- | --- |
 | `CTRL` | 4 | 512 | `contract_CtrlTask` | 5 ms 绝对节拍，每拍调 `contract_ControlStep()` |
 | `CAN_RX` | 3 | 256 | `contract_CanRecvTask` | 阻塞 `can_RecvFrame()` 取帧 → `contract_HandleFrame()` 分流 |
-| `STATE` | 2 | 256 | `contract_StateTask` | 带超时等事件 → `contract_Step()` 查表迁移；超时走 `contract_UiStep()` 刷屏 |
+| `STATE` | 2 | 256 | `contract_StateTask` | 带超时等事件 → `contract_Step()` 查表迁移；超时走 `contract_UiStep()` 刷屏 + `oled_Step()` 刷状态页（本任务兼作低速后台） |
 
 急停为什么快：`CAN_RX` 优先级高于 `STATE`，帧一到就抢占运行，投完事件 `STATE`
 立即就绪；`CTRL` 每 5 ms 只占极短时间。最坏等待 = 一次控制脉冲（几十 µs 量级）。
@@ -525,27 +526,33 @@ Data[7]     保留填 0
 | `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
 | `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
 | **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
+| **避障层**（`avoid.c`） | `avoid_Step()` 在编排序列里紧跟 `nav_Step()` 之后；读视觉2 的 `0xF3` 障碍横向偏移，只在 `RUNNING` 且本段属**平移族**（`FORWARD` / `STRAFE` / `RING` / `STACK`）时，把 `±AVOID_STRAFE_VEL` **叠加**到黑板 `chassis.vx` 上（不改 `vy`，不覆盖 nav 本段的横移目标） | ⚠ `AVOID_STRAFE_VEL` / `AVOID_HOLD_MS` / `AVOID_DEADBAND_CM` 为**占位值**；视觉侧须按 `0xF3` 定稿格式发帧（障碍存在期间持续发，MCU 靠帧超时判消失） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
 > "每周期都被调用"才成立；放到闸门之后就变成死代码。
 > 保护并未因此削弱 —— `nav_Step()` 只写黑板 `chassis.vx/vy/w` 与 `chassis.yawTarget`，不碰车轮，
 > 真正的下发仍被闸门挡在 RUNNING 之内。
->
+
+> **`avoid_Step()` 必须排在 `nav_Step()` 之后，且只叠加不覆盖。** 它要在导航本周期算完速度后
+> 再往 `vx` 上加让行分量；若改成直接赋值，`STRAFE` / `RING` / `STACK` 段的横移目标会被整段抹掉，
+> 车会变成"只让行不前进"。转向 / 对准 / 取放段不介入，否则会把机构动作冲掉。
+
 > 另一个配套约定：**航向误差一律在连续域上算**。`chassisDrive.odomYawCont` 单调累加、
 > 跨 ±180 不跳变，导航到位判据与姿态环 PID 都读它；`odomYaw` 只是它的归一化副本，
 > 供内部的泰勒展开近似使用。若拿归一化值相减，179° → -180° 会算出几百度的假误差。
 
-### 未接入模块怎么接进来
+### 各模块的接入形态（**已全部接入**）
 
-各模块都按"**硬件就绪、逻辑自洽、只差一行调用**"的形态交付：
+各模块均按"**硬件就绪、逻辑自洽、只差一行调用**"的形态交付，当前**已无未接入模块**：
 
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
 | `input`（三条串口 + 摁键） | `input_Init()` 只配硬件与字节管道；`input_Step()` **已接入**（编排序列第 1 步） | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。三条通道的字节均有消费方（`screen_Step()` 已接） |
-| `vision`（两个视觉模块） | **两个都已接入**（编排序列第 1 步）：`vision1_Step()` 解析 `0xF5`（颜色 + 对准距离）、`vision_Step()` 解析 `0xF3` / `0xF4`（避障 / 任务码）；`vision_Init()` 在 `ALL_Init()` 归零槽位 | 无。帧解析靠 `input_Read()` 拉字节，须在**任务上下文**调用。⚠ 避障帧 `0xF3` 的数据内容未定稿，`vision_TakeFrame()` 恒返 0，避障层仍无从消费 |
+| `vision`（两个视觉模块） | **两个都已接入**（编排序列第 1 步）：`vision1_Step()` 解析 `0xF5`（颜色 + 对准距离）、`vision_Step()` 解析 `0xF3`（障碍横向偏移）/ `0xF4`（任务码）；`vision_Init()` 在 `ALL_Init()` 归零槽位 | 无。帧解析靠 `input_Read()` 拉字节，须在**任务上下文**调用 |
+| `avoid`（避障层） | **已接入**：`avoid_Step()` 排在编排序列 `nav_Step()` **之后**；消费 `vision_TakeFrame()` 的障碍横向偏移 | 无。⚠ 让行速度 / 失效时长 / 死区三个宏为**占位值**，待实测 |
 | `screen`（串口屏协议） | **已接入**：`screen_Step()` 收屏上报（编排序列第 1 步）；上屏（任务码 / 任务统计）走 `screen_ShowTask()` / `screen_ShowGet()` / `screen_ShowPut()` / `screen_ShowErr()`，**调用点在 STATE 任务**（`contract_UiStep()`）—— 屏指令是阻塞发送（115200 下最长约 6 ms），**不能放进 5 ms 控制环**；且**每个 200 ms 超时周期最多发一条**，把连发阻塞摊到多个周期。⚠ 控件名宏 `SCREEN_OBJ_*` 是**占位值**，按 TJC 工程实际控件名改 | 屏上报的字节经 `input_Read(INPUT_SCREEN)` 拉取，须在**任务上下文**调用 |
-| `oled` | 加 `oled_Step()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不要放进对时序敏感的临界区** |
+| `oled` | **已接入**：`oled_Step()` 在 STATE 任务里紧跟 `contract_UiStep()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不能放进 5 ms 控制环**；放在 STATE 是为了让阻塞与屏发送**在同一任务内串行**，不与控制环叠加 |
 | `servo` | **三路都已由 `grip_seq.c` 的夹持机构接管**（CH1 旋转轴 / CH2 夹子 / CH3 车载物料盘），无需额外接入；标定行程走 `CMD_GRIP_*`（`0x33`~`0x37`）或直接调 `servo_SetPulse()` | 无。⚠ **不要绕过夹持机构直接改这三路的角度** —— 会与旋转轴 / 物料盘斜坡和装载序列打架 |
 
 > 新模块的周期处理挂进 `contract_ControlStep()` 的编排序列里；**插入位置由该模块自身的
@@ -633,7 +640,7 @@ Data[7]     保留填 0
 - ⚠ `NAV_MAP_RING_DOCK_NUM` / `NAV_MAP_RING_DIR`（`nav_map.h`）是**占位值**：
   入口停靠点正对哪个位号、位号增大朝车体哪一侧，取决于现场两区的摆位与编号方向，需实测核定。
 
-### 视觉模块 2（`vision.c`）：任务码已接入，避障内容仍留空
+### 视觉模块 2（`vision.c`）：任务码 + 避障帧均已定稿并接入
 
 **通信帧格式 = 匿名（ANO）通信协议 V7 的精简帧 —— 去掉了目标地址 `D_ADDR`**，
 其余字段与校验算法原样保留：
@@ -672,11 +679,18 @@ Data[7]     保留填 0
   - 位号换算成底盘横移：`(目标位号 − 当前位号) × NAV_MAP_RING_PITCH_MM × NAV_MAP_RING_DIR`；
     入口基准位号与方向见 `NAV_MAP_RING_DOCK_NUM` / `NAV_MAP_RING_DIR`（**占位值，待实测**）。
 
-仍留空的是**内容**（结构已就位）：
+**避障帧（`0xF3`，2026-10-06 定稿）**：DATA 固定 **2 字节**，`int16` 小端，只有一个字段 ——
 
-| 留空项 | 位置 | 现状 | 填写时机 |
+| 偏移 | 字段 | 类型 | 含义 |
 | --- | --- | --- | --- |
-| **避障帧（`0xF3`）的数据内容** | `VisionObst_t` / `VISION_OBST_MAX` | 收到即计帧数，**不解析**，故 `obstFresh` 恒为 0 | 避障帧字段量纲确定后 |
+| `[0:1]` | `x` | `int16` 小端 | 障碍**横向偏移(cm)**：**正 = 障碍在车前方偏左**，负 = 偏右 |
+
+- **不报纵向距离**：视觉只在障碍进入警戒区时发帧，**"收到这一帧"本身就是触发信号**；
+  MCU 侧靠**帧超时**（`AVOID_HOLD_MS`）判断障碍消失 —— 障碍在场期间视觉须持续发帧。
+- 单帧单条，落进 `visionSlot.obst[0]` + `count = 1` + `obstFresh = 1`；
+  `vision_TakeFrame()` 取走后清 `obstFresh`，避障层在两次取帧之间沿用槽位里的最后偏移。
+- 障碍物实体是 **φ50×100 mm 黑色圆柱**（模拟障碍），帧里不带尺寸。
+- ⚠ 发置信度、发多条、发纵向距离都**不在协议里**，不要自行加字段。
 
 **视距已实测**：`VISION_RANGE_MM = 500`（50 cm）。车速上限由它反推 ——
 `净空 = 车速×总延迟 + 车速²/(2×减速度) + 车体半径 + 障碍半径`。
@@ -695,7 +709,7 @@ Data[7]     保留填 0
 | 串口 | USART1（PA9/PA10，DMA2 Stream5） | USART3（PB10/PB11，DMA1 Stream3） | USART2（PA2/PA3，DMA1 Stream5） |
 | 承载内容 | 物块颜色 + 对准相对距离（前后 / 左右） | 障碍物（`0xF3`）+ 任务码（二维码，`0xF4`），视距 50 cm | 控件指令下发 + 触摸 / 变量事件上报 |
 | 协议实现 | `vision.c`（**匿名协议精简帧**，与视觉 2 共用组帧 / 校验） | `vision.c`（**匿名协议精简帧**） | `screen.c`（TJC 协议） |
-| 状态 | 协议已落地**并接入控制环**（`0xF5`，DATA 5 字节）；消费方为对准段 | 协议已落地**并接入控制环**（`0xF4` 任务码由装载段消费；`0xF3` 数据内容待定稿，`vision_TakeFrame()` 恒返 0） | 协议已落地，未接入控制环 |
+| 状态 | 协议已落地**并接入控制环**（`0xF5`，DATA 5 字节）；消费方为对准段 | 协议已落地**并接入控制环**：`0xF4`（任务码）由装载段消费，`0xF3`（障碍横向偏移，DATA 2 字节）由避障层 `avoid_Step()` 消费 | 协议已落地**并接入控制环**（收：`screen_Step()`；发：STATE 任务里的 `contract_UiStep()`） |
 
 ### 新机构接入系统要做三件事
 

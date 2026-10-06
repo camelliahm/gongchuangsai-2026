@@ -52,18 +52,17 @@ const Vision1Slot_t *vision1_GetSlot(void);
 
 /*---- 视觉模块 2（USART3）：避障 + 任务码 --------------------------*/
 
-#define VISION_ID_OBST			(0xF3u)		//功能码：避障信息；数据内容未定，暂不解析
+#define VISION_ID_OBST			(0xF3u)		//功能码：避障信息（障碍物横向偏移）
 #define VISION_ID_TASK			(0xF4u)		//功能码：任务码（二维码），数据为 ASCII 原文
-#define VISION_OBST_MAX			(8u)		//障碍物条数上限；数据内容未定，当前恒为 0 条
+#define VISION_OBST_DATA_LEN	(2u)		//0xF3 的 DATA 固定长度：横向偏移 int16，多字节小端
+#define VISION_OBST_MAX			(8u)		//障碍物条数上限（帧格式预留，当前单条）
 #define VISION_TASK_CODE_MAX	(16u)		//任务码 ASCII 原文上限；当前 4 组共 12 位
 #define VISION_RANGE_MM			(500)		//有效识别距离(mm)，实测 50 cm；0 = 未知（哨兵）
 
-//障碍物：车体坐标；⚠ 字段全是待定值，避障层实现前不得使用
+/* 障碍物：φ50×100mm 黑色圆柱，视觉只给横向偏移，不含纵向距离 ——
+ * 收到本帧即代表"障碍已进入警戒区"，MCU 据此减速让行；超时收不到即视为障碍消失 */
 typedef struct {
-	int16_t x;				//障碍中心横向(车体坐标, mm)：⚠ 待定
-	int16_t y;				//障碍中心纵向(车体坐标, mm)：⚠ 待定
-	int16_t width;			//障碍宽度(mm)：⚠ 待定
-	uint8_t confidence;		//置信度 0~100：⚠ 待定
+	int16_t x;				//障碍横向偏移(cm)：正 = 障碍在车前方偏左，负 = 偏右
 } VisionObst_t;
 
 //任务码（二维码）：视觉模块 2 原样上报的数字串，如 "156123516231"（4 组各 3 位）
@@ -79,8 +78,8 @@ typedef struct {
 	uint16_t rxCnt;						//累计通过校验的完整帧数
 	uint16_t errCnt;					//失步 / 长度越界 / 校验失败 / 未知功能码帧数
 
-	uint8_t  obstFresh;					//1 = 有新避障帧待取走；数据内容未定，暂不会置位
-	uint8_t  count;						//本帧障碍物条数
+	uint8_t  obstFresh;					//1 = 有新避障帧待取走；超时未刷新即视为障碍消失
+	uint8_t  count;						//本帧障碍物条数（当前恒为 1）
 	VisionObst_t obst[VISION_OBST_MAX];	//障碍物列表
 
 	uint8_t  taskFresh;					//1 = 有新任务码待取走
@@ -92,7 +91,7 @@ extern __IO VisionSlot_t visionSlot;	//视觉模块 2 槽位（USART3）
 //初始化：复位两个视觉槽位与组帧状态；⚠ 须在 input_Init() 之后调用（槽位基准取 xTaskGetTickCount）
 void vision_Init(void);
 
-//周期处理：收帧 + 校验 + 刷新在线标志；⚠ 当前无调用点（未接入控制环）
+//周期处理：收帧 + 校验 + 刷新在线标志
 void vision_Step(void);
 
 //取走一帧避障数据：返回条数(0 = 无)，取后清 obstFresh

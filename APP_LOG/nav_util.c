@@ -60,6 +60,22 @@ uint16_t nav_GetSeg(void)
 }
 
 /**
+ * @brief  读当前航段类型
+ * @note   返回 NavSegType_t；段号越界时返回 NAV_SEG_END。
+ *         供避障层判断"本段是否属于平移族"，不暴露航段细节
+ * @author camelliahm
+ */
+uint8_t nav_GetSegType(void)
+{
+	if (s_nav.seg >= s_nav.mapNum)
+	{
+		return (uint8_t)NAV_SEG_END;
+	}
+
+	return s_nav.map[s_nav.seg].type;
+}
+
+/**
  * @brief  读任务统计（上屏 / 诊断）
  * @param  dst 输出结构；为空指针时不动
  * @author camelliahm
