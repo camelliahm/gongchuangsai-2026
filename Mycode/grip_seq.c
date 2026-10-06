@@ -179,7 +179,7 @@ static void grip_Enter(GripPhase_t p)
 	case GRIP_U_JAW_CLOSE:  grip_SetJaw(true);               break;
 	case GRIP_U_LIFT_UP:    grip_LiftTo(GRIP_H_SAFE_MM);     break;
 	case GRIP_U_ROT_DROP:   grip_RotTo(GRIP_ROT_U_DROP_DEG); break;
-	case GRIP_U_LOWER_DROP: grip_LiftTo(GRIP_H_U_DROP_MM);   break;
+	case GRIP_U_LOWER_DROP: grip_LiftTo(grip.dropH);        break;
 	case GRIP_U_JAW_OPEN:   grip_SetJaw(false);              break;
 	case GRIP_U_LIFT_CLEAR: grip_LiftTo(GRIP_H_SAFE_MM);     break;
 	case GRIP_U_ROT_SAFE:   grip_RotTo(GRIP_ROT_SAFE_DEG);   break;
@@ -256,6 +256,7 @@ void grip_Init(void)
 	grip.traySlot   = 1u;
 	grip.seqLoad    = 0u;
 	grip.pickH      = GRIP_H_PICK_MM;
+	grip.dropH      = GRIP_H_U_DROP_MM;
 	grip.rotTarget  = GRIP_ROT_SAFE_DEG;
 	grip.rotNow     = GRIP_ROT_SAFE_DEG;
 	grip.trayTarget = GRIP_TRAY_POS1_DEG;
@@ -537,14 +538,15 @@ bool grip_LoadOnce(void)
 }
 
 /**
- * @brief  启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）
- * @param  slot 待取槽位(1~GRIP_TRAY_POS_NUM)
+ * @brief  启动一次车外放置序列（卸料 / 码垛共用），只差放置高度
+ * @param  slot  待取槽位(1~GRIP_TRAY_POS_NUM)
+ * @param  dropH 车外放置高度(mm)：平放 = GRIP_H_U_DROP_MM，码垛 = GRIP_H_STACK_MM
  * @retval true = 已启动；false = 前置条件不满足
  * @note   与 grip_LoadOnce() 反向：车须已由编排层停在目标区前，本函数只管一次取放；
  *         slot 越界（0 或超过槽位数）直接拒绝，调用方据此判故障
  * @author camelliahm
  */
-bool grip_UnloadOnce(uint8_t slot)
+static bool grip_UnloadStart(uint8_t slot, float dropH)
 {
 	if ((chassis.state != CHS_READY) && (chassis.state != CHS_RUNNING))
 	{
@@ -566,8 +568,32 @@ bool grip_UnloadOnce(uint8_t slot)
 	grip.fault      = 0u;
 	grip.busy       = 1u;
 	grip.unloadSlot = slot;
+	grip.dropH      = dropH;
 	grip_Enter(GRIP_U_ROT_TRAY);
 	return true;
+}
+
+/**
+ * @brief  启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）
+ * @param  slot 待取槽位(1~GRIP_TRAY_POS_NUM)
+ * @retval true = 已启动；false = 前置条件不满足
+ * @author camelliahm
+ */
+bool grip_UnloadOnce(uint8_t slot)
+{
+	return grip_UnloadStart(slot, GRIP_H_U_DROP_MM);
+}
+
+/**
+ * @brief  启动一次码垛卸载（放置高度抬一个料高，叠到已有的物料上）
+ * @param  slot 待取槽位(1~GRIP_TRAY_POS_NUM)
+ * @retval true = 已启动；false = 前置条件不满足
+ * @note   仅放置高度与 grip_UnloadOnce() 不同，其余（取料 / 旋转 / 松开）完全一致
+ * @author camelliahm
+ */
+bool grip_StackOnce(uint8_t slot)
+{
+	return grip_UnloadStart(slot, GRIP_H_STACK_MM);
 }
 
 /**

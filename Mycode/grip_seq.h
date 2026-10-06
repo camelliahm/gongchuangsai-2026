@@ -58,6 +58,12 @@
 
 #define GRIP_H_R_PICK_MM	(GRIP_H_U_DROP_MM)	//圆环取料高度(mm)：暂沿用卸载放置高度  ⚠ 待实测，地面圆环台面高度
 
+/*---- 码垛（第二批在暂存区叠到第一批物料之上）----*/
+/* 放置高度比平放高一个料高：夹爪托着物料下到已有物料的顶面即停，不靠自由落体 */
+
+#define GRIP_ITEM_H_MM		(80.0f)	//物料最大高度(mm)，取命题上限  ⚠ 占位值，待实测
+#define GRIP_H_STACK_MM		(GRIP_H_U_DROP_MM + GRIP_ITEM_H_MM)	//码垛放置高度(mm)：第二层 = 第一层 + 一个料高  ⚠ 占位值，待实测
+
 #define GRIP_LIFT_VEL		(LIFT_VEL_DEFAULT)	//夹持动作的升降速度(RPM)，沿用升降轴默认
 #define GRIP_LIFT_ACC		(LIFT_ACC_DEFAULT)	//夹持动作的升降加速度(0-255)
 
@@ -106,6 +112,7 @@ typedef struct {
 	float	 trayTarget;	//物料盘目标角(°)（由斜坡逐步逼近）
 	float	 trayNow;		//物料盘当前角(°)（斜坡中间值，非舵机反馈）
 	float	 pickH;			//本轮抓取高度(mm)：装载 = 原料区转盘，取回 = 地面圆环
+	float	 dropH;			//本轮车外放置高度(mm)：平放 = GRIP_H_U_DROP_MM，码垛 = GRIP_H_STACK_MM
 	uint32_t phaseTick;		//进入当前阶段的 tick（超时判据）
 } Grip_t;
 
@@ -128,6 +135,10 @@ bool grip_LoadOnce(void);
 /* 启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）；
  * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */
 bool grip_UnloadOnce(uint8_t slot);
+
+/* 启动一次码垛卸载：动作与 grip_UnloadOnce() 相同，只是放置高度抬一个料高，叠到已有物料上；
+ * 返回 false = 前置条件不满足 */
+bool grip_StackOnce(uint8_t slot);
 
 /* 启动一次取回（车外目标区取料 → 转 180° 装回物料盘第 slot 槽 → 回安全位）；
  * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */

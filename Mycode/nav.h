@@ -14,15 +14,19 @@ typedef enum {
 	NAV_SEG_DWELL,		//停留：value = 时长(ms)
 	NAV_SEG_HOME,		//升降轴回零：车停原地等 lift.homed，value 忽略
 	NAV_SEG_ALIGN,		//视觉对准：读视觉1 相对距离微调底盘，value 忽略
-	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value 忽略
+	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value = 颜色组号
 	NAV_SEG_UNLOAD,		//单次卸载：从物料盘第 value 槽取料并放到车外目标区，value = 槽位(1~3)
 	NAV_SEG_RELOAD,		//单次取回：把车外目标区的物料装回物料盘第 value 槽，value = 槽位(1~3)
+	NAV_SEG_RING,		//横移对准任务码指定位置：value = 组号×10 + 件序号，位置号取 task[组][件]
+	NAV_SEG_STACK,		//横移对准码垛位：value = 第二批件序号(0~2)，位置取第一批同色物料所在位
+	NAV_SEG_STACKED,	//单次码垛卸载：动作同 NAV_SEG_UNLOAD，放置高度抬一个料高，value = 槽位(1~3)
 } NavSegType_t;
 
 //航段：位移/转角用 value + 符号表达，speed 只对平移段有效
+//⚠ value 的语义随 type 变：位移 / 转角 / 时长 / 槽位 / 组号×10+件序号 / 件序号
 typedef struct {
 	uint8_t  type;		//NavSegType_t
-	int16_t  value;		//位移(mm) / 转角(0.1 度) / 时长(ms)
+	int16_t  value;		//位移(mm) / 转角(0.1 度) / 时长(ms) / 槽位 / 组号×10+件序号 / 件序号
 	int16_t  speed;		//平移速度(mm/s)，恒正；转向与停留段忽略
 	uint32_t timeout;	//本段超时(ms)；0 = 用 NAV_SEG_TIMEOUT_MS。转向/对准/装载/取放/回零段应显式给（默认值会提前打断）
 } NavSeg_t;
@@ -36,7 +40,7 @@ typedef enum {
 } NavState_t;
 
 /*---- 参数 ----*/
-#define NAV_SEG_MAX			(48u)		//单张地图最大航段数
+#define NAV_SEG_MAX			(96u)		//单张地图最大航段数
 #define NAV_CTRL_PERIOD_MS	(5u)		//须与 CHASSIS_CTRL_PERIOD_MS 一致
 #define NAV_TURN_WINDOW_DEG	(2.0f)		//转向到位窗口(度)
 #define NAV_TURN_HOLD_MS	(200u)		//转向到位后需保持的时长
@@ -72,6 +76,9 @@ typedef enum {
 
 /*---- 取回段（NAV_SEG_RELOAD）----*/
 #define NAV_RELOAD_TIMEOUT_MS	(60000u)	//取回段的段超时(ms)：须覆盖一次完整取放  ⚠ 占位值
+
+/*---- 横移对准段（NAV_SEG_RING / NAV_SEG_STACK）----*/
+#define NAV_RING_TIMEOUT_MS		(15000u)	//横移对准段的段超时(ms)：跨 2 个位号 = 300 mm，按进位速度约 2 s
 
 /*---- 任务码（视觉2 上报，4 组 × 3 位）----*/
 /* 原文为 12 位数字（如 "156123516231"），组间无分隔符，故按固定位序切分而非按 '+'

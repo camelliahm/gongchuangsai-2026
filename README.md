@@ -440,7 +440,7 @@ Data[7]     保留填 0
 | **接避障层**<br>反应式优先级抑制 | 新建 `avoid.c`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
 | **改状态屏内容** | `oled.c` | `oled_ShowStatus()` |
 | **换舵机 / 标定行程** | `servo.h` | `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US` |
-| **改夹持机构的角度 / 高度 / 斜坡** | `grip_seq.h` | `GRIP_ROT_*`（三个端点角与斜坡速率）、`GRIP_JAW_*`（开合角）、`GRIP_H_*`（三个高度）、`GRIP_TRAY_*`（物料盘通道 / 三槽位 / 斜坡）、`GRIP_*_TIMEOUT_MS` |
+| **改夹持机构的角度 / 高度 / 斜坡** | `grip_seq.h` | `GRIP_ROT_*`（三个端点角与斜坡速率）、`GRIP_JAW_*`（开合角）、`GRIP_H_*`（抓取 / 落盘 / 安全 / 卸载 / 取回 / 码垛各高度）、`GRIP_TRAY_*`（物料盘通道 / 三槽位 / 斜坡）、`GRIP_*_TIMEOUT_MS` |
 
 ### 场地地图与默认路线（`nav_map.h`）
 
@@ -460,15 +460,19 @@ Data[7]     保留填 0
   "位置在规定范围内随机摆放，以现场为准"）。本表取中值；实车必须用视觉模块 2 的识别结果
   修正，不能只靠本表开环跑。
 
-`nav_map.h` 末尾的 `s_defaultMap[]` 是**初赛单程路线**（启停区 1 → 读码 → 原料区 → 粗加工区 →
-暂存区 → 启停区 1，20 段 + END），**段值全部写成同文件场地常量的表达式**，表里不出现裸数字。
-三个前提写在表上方的注释里：起点位姿（启停区 1 中心，机头朝 +X）、转向正方向（逆时针为正，
-实车反向则 TURN 段取负）、随机项取中值。运行时由 `nav_Init()` 装载（`nav_Load()` 可换任意表）。
+`nav_map.h` 末尾的 `s_defaultMap[]` 是**初赛全程路线**（68 段 + END），**段值全部写成同文件
+场地常量的表达式**，表里不出现裸数字。全程 = 读码 → 第一批（原料区取 → 粗加工区放 → 取回 →
+暂存区放）→ 回原料区取第二批（粗加工区放 → 取回 → 暂存区码垛）→ 回启停区 1；两批各 4 次
+取放动作，位置号一律由任务码给出。三个前提写在表上方的注释里：起点位姿（启停区 1 中心，
+机头朝 +X）、转向正方向（逆时针为正，实车反向则 TURN 段取负）、随机项取中值。运行时由
+`nav_Init()` 装载（`nav_Load()` 可换任意表）。
 
 > 转向段显式给 `timeout = NAV_TURN_TIMEOUT_MS`：姿态环一阶时间常数约 5 s，**180° 约需 24 s**，
 > 超过默认的 20 s 单段超时。平移/停留段用默认 `NAV_SEG_TIMEOUT_MS`，保持较紧的卡死检测。
-> 回零 / 对准 / 装载段同样**必须显式给**（`NAV_HOME_TIMEOUT_MS` / `NAV_ALIGN_TIMEOUT_MS` /
-> `NAV_LOAD_TIMEOUT_MS`）—— 它们比默认的 20 s 长，段超时在这三段里只作兜底。
+> 回零 / 对准 / 装载 / 取放 / 横移段同样**必须显式给**（`NAV_HOME_TIMEOUT_MS` /
+> `NAV_ALIGN_TIMEOUT_MS` / `NAV_LOAD_TIMEOUT_MS` / `NAV_UNLOAD_TIMEOUT_MS` /
+> `NAV_RELOAD_TIMEOUT_MS` / `NAV_RING_TIMEOUT_MS`）—— 它们比默认的 20 s 长，段超时只作兜底。
+> 段数 68 已接近 `NAV_SEG_MAX`(96) 的上限，删改路线时留意 `nav_Load()` 的长度校验。
 
 ### 摁键自启动（板内自举）
 
@@ -494,7 +498,7 @@ Data[7]     保留填 0
 2. 到点**重新判定一次状态**再投事件：`IDLE` → 投 `EV_ENABLE` + `EV_START`（一步到 `RUNNING`）；
    `READY` → 只投 `EV_START`；其余状态（3 s 内被后门改动过）**放弃本次启动**。
 3. 进入 `RUNNING` 的动作里带 `nav_Start()`，于是车开始跑 `nav_map.h` 的默认路线 ——
-   **摁键的实质是"开始跑那条 20 段路线"**，不是"上电就走"。
+   **摁键的实质是"开始跑那条 68 段路线"**，不是"上电就走"。
 
 - **按下即锁存**，中途松手不取消；计时窗口内再按不生效。
 - **上电时以当前电平为基准**，所以"摁键被压住时上电"不产生按下边沿 —— 避免上电即跑车。
@@ -515,7 +519,7 @@ Data[7]     保留填 0
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
 | `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
 | `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
-| **对准 / 装载 / 回零 / 取放段**（`nav.c`） | 五段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD`，在 `nav_SegStep()` 里各自管住超时与重试（后两者共用 `nav_GripStep()`） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据依赖视觉模块 2 的任务码（取不到即判故障） |
+| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav.c`） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
@@ -566,13 +570,14 @@ Data[7]     保留填 0
 
 ### 原料区动作：回零 / 对准 / 装载三个航段（`nav.c`）
 
-原料区那一段（默认路线 ⑥⑦⑧）由**三个新段类型**承载，都是"车停原地、只动机构或只微调底盘"：
+原料区那两段（默认路线 06·07·08 与 37·38·39，两批各一次）由**三个新段类型**承载，
+都是"车停原地、只动机构或只微调底盘"：
 
 | 段类型 | 做什么 | 判完成 | 段超时 |
 | --- | --- | --- | --- |
 | `NAV_SEG_HOME` | 进入本段时若 `lift.homed = 0` 就 `lift_Home()`，之后等反馈 | `lift.homed != 0` | `NAV_HOME_TIMEOUT_MS` |
 | `NAV_SEG_ALIGN` | 读 `vision1_GetSlot()`，`vy = Kp·front`、`vx = −Kp·left`，两轴同时进窗口后停住保持 | 两轴 \|误差\| ≤ `NAV_ALIGN_TOL_MM` 且持续 `NAV_ALIGN_HOLD_MS` | `NAV_ALIGN_TIMEOUT_MS` |
-| `NAV_SEG_LOAD` | 段入口取任务码顺序并清装载计数；每轮**先等本轮目标色**（`nav_ColorWait()`：原地泊住，同色连续 `NAV_COLOR_HOLD_FRAMES` 帧算停稳）→ 再对准 → **抓取前复查颜色**（`nav_ColorMatched()`，不符退回等色步重来）→ 再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
+| `NAV_SEG_LOAD` | 段入口按段值定的**颜色组**（第 1 组 / 第 3 组）取任务码并清装载计数；每轮**先等本轮目标色**（`nav_ColorWait()`：原地泊住，同色连续 `NAV_COLOR_HOLD_FRAMES` 帧算停稳）→ 再对准 → **抓取前复查颜色**（`nav_ColorMatched()`，不符退回等色步重来）→ 再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
 
 - **重试框架**：`nav_TryTimeout()` 管单次尝试的时限与重试计数。`ALIGN` 用
   `NAV_ALIGN_TRY_TIMEOUT_MS` × `NAV_ALIGN_RETRY`；`LOAD` 里对准与抓取**共用** `s_nav.retry`。
@@ -586,7 +591,8 @@ Data[7]     保留填 0
 - **物料盘与夹持轴并行**：进入落盘旋转阶段时两轴同时起斜坡（各自按 `GRIP_*_SLEW_DEG`），
   下降到放料高度前要求**两轴都到位**。第 k 轮的目标槽位 = 已装轮数 + 1（顺序 1 → 位置一 = 0°）。
 - **挑色抓取（颜色策略 B1）**：转盘会停但**停位随机**，不能保证首次停的就是任务码要的第一个颜色 ——
-  故每轮**先等目标色**（`task[NAV_TASK_G_ORDER1][loadCount]`）转到取料点、连续若干帧同色确认停稳，再对准抓取。
+  故每轮**先等目标色**（`task[loadGroup][loadCount]`，`loadGroup` = 本段段值定的颜色组）转到取料点、
+  连续若干帧同色确认停稳，再对准抓取。
   等色期间车原地泊住（`vx/vy = 0`），颜色不可信（`online = 0` 或 `color = 0`）时同样不动作。
   **槽位仍由轮次决定**（`loadCount + 1`），**不是**按颜色查表。无任务码（`taskGot = 0`）时本段判故障。
 - **抓取前复查颜色**（`nav_ColorMatched()`）：等色判据是"对准之前"的快照，而对准本身要耗时，
@@ -596,20 +602,31 @@ Data[7]     保留填 0
 - ⚠ **段超时字段是 `uint32_t`**：一轮装载按当前的 `LIFT_VEL_DEFAULT`（300 RPM = 10 mm/s）估算
   约 40 s，三轮"等色 + 对准 + 动作"已远超 `uint16_t` 的 65.5 s 上限（现给 240 s）。抬高升降速度后可以调小这些常量。
 
-### 目标区动作：卸载 / 取回两个航段（`nav.c`）
+### 目标区动作：横移 + 卸料 / 取回 / 码垛（`nav.c`）
 
-车外目标区（粗加工区 / 暂存区）的两类动作各占一个段类型，同名段可重复出现（**每件一个段**）：
+车外目标区（粗加工区 / 暂存区）的动作分两类：**横移对准**（底盘）与**取放**（机构），
+各自占一个段类型，同名段可重复出现（**每件一个段**）：
 
 | 段类型 | 做什么 | 判完成 | 段超时 |
 | --- | --- | --- | --- |
+| `NAV_SEG_RING` | `value` = 组号×10 + 件序号；取 `task[组][件]` 得位号，横移到该位 | 位移投影到位 | `NAV_RING_TIMEOUT_MS` |
+| `NAV_SEG_STACK` | `value` = 第二批件序号；取**第一批同色物料**所在位，横移到该位 | 同上 | `NAV_RING_TIMEOUT_MS` |
 | `NAV_SEG_UNLOAD` | `value` = 物料盘槽位；调 `grip_UnloadOnce(slot)`，机构动作期间车原地泊住 | 机构空闲且 `grip.fault = 0` | `NAV_UNLOAD_TIMEOUT_MS` |
 | `NAV_SEG_RELOAD` | `value` = 物料盘槽位；调 `grip_ReloadOnce(slot)`，其余同上 | 同上 | `NAV_RELOAD_TIMEOUT_MS` |
+| `NAV_SEG_STACKED` | `value` = 物料盘槽位；调 `grip_StackOnce(slot)`，放置高度抬一个料高 | 同上 | `NAV_UNLOAD_TIMEOUT_MS` |
 
-- 两段共用一个实现 `nav_GripStep(slot, fromTray)`，只靠方向参数区分
-  （`NAV_GRIP_FROM_TRAY` 卸料 / `NAV_GRIP_TO_TRAY` 取回）。
+- 横移段与平移段共用到位判据，只是位移由**位号差**折算：
+  `(目标位号 − 当前位号) × NAV_MAP_RING_PITCH_MM × NAV_MAP_RING_DIR`。
+  **当前位号在"取放族"段之间保持**（区域内逐件横移不必每次回到入口基准），
+  一旦遇到非取放族段（平移 / 转向 / 停留 / 对准 / 装载 / 回零）就复位到 `NAV_MAP_RING_DOCK_NUM`。
+- 三个取放段共用一个实现 `nav_GripStep(slot, mode)`，只靠模式参数区分
+  （`NAV_GRIP_UNLOAD` / `NAV_GRIP_RELOAD` / `NAV_GRIP_STACK`）。
 - 前置条件是**车已由上游平移段停在目标区前**；不满足（状态不符 / 升降轴未回零 / 槽位越界）
   **不重试，直接判故障**，与 `NAV_SEG_LOAD` 同一条口径。
-- ⚠ 段值 `value`（槽位）由地图给出，"第 k 件放第几号环"的映射属地图职责，本层不解析任务码。
+- ⚠ **位号越界即判故障**：任务码的位置组不做范围校验（现场圆环数未定），取值落在 1~3 之外、
+  或第二批某色在第一批里找不到同色物料，横移段入口就 `nav_Fault()`，不猜。
+- ⚠ `NAV_MAP_RING_DOCK_NUM` / `NAV_MAP_RING_DIR`（`nav_map.h`）是**占位值**：
+  入口停靠点正对哪个位号、位号增大朝车体哪一侧，取决于现场两区的摆位与编号方向，需实测核定。
 
 ### 视觉模块 2（`vision.c`）：任务码已接入，避障内容仍留空
 
@@ -639,11 +656,16 @@ Data[7]     保留填 0
 
   位数不足 12 位、或颜色组出现越界值 → **整码作废**（保留上次结果，不置 `taskGot`），
   避免视觉短暂丢帧把任务清空。颜色编号 1 红 / 2 黄 / 3 蓝 / 4 绿 / 5 黑 / 6 浅蓝。
-- **位置组的归属（已确认，2026-10-06）**：
+- **位置组的消费方（已确认，2026-10-06）**：
   - 第 2 组 = **第一批**物料在**粗加工区 + 暂存区**的放置位号，**两区同号** ——
     第一批第 k 个 → 粗加工区 = 暂存区 = `task[NAV_TASK_G_POS1][k]`。
-  - 第 4 组 = **第二批**物料在**粗加工区**的放置位号 → `task[NAV_TASK_G_POS2][k]`。
-  - 第二批进暂存区**不读新码**：它是把第二批**码垛**在第一批物料之上（命题原文：暂存区码垛、颜色一致）。
+    粗加工区放完就地按**同一组位号**取回，运至暂存区再按同一组位号放下。
+  - 第 4 组 = **第二批**物料在**粗加工区**的放置位号 → `task[NAV_TASK_G_POS2][k]`，取回同号。
+  - 第二批在**暂存区**不读位置码：它是把第二批**码垛**在第一批物料之上，位号由**同色反查**得到 ——
+    `nav_StackRing(k)` 拿 `task[ORDER2][k]` 的颜色去 `task[ORDER1][*]` 里找同色件，
+    取其 `task[POS1][*]`（命题原文：暂存区码垛、颜色一致）。
+  - 位号换算成底盘横移：`(目标位号 − 当前位号) × NAV_MAP_RING_PITCH_MM × NAV_MAP_RING_DIR`；
+    入口基准位号与方向见 `NAV_MAP_RING_DOCK_NUM` / `NAV_MAP_RING_DIR`（**占位值，待实测**）。
 
 仍留空的是**内容**（结构已就位）：
 

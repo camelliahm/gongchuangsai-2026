@@ -82,56 +82,108 @@
 #define NAV_MAP_SPEED_DOCK		(150)						//进位段速度(mm/s)
 
 #define NAV_MAP_DWELL_QR_MS		(800)						//读二维码 + 任务码上屏
-#define NAV_MAP_DWELL_PLACE_MS	(3000)						//放置机构动作（占位，待机构确定）
+
+/*---- 目标区位置（圆环）横移 ----*/
+/* 车停在区域入口停靠点时正对哪个位号、位号增大朝车体哪一侧，取决于现场两区的摆位与编号方向 */
+#define NAV_MAP_RING_DOCK_NUM	(2)							//入口停靠点正对的位号(1~3)  ⚠ 占位值，待实测
+#define NAV_MAP_RING_DIR		(-1)						//位号 +1 时的车体横移方向：+1 = 右移，−1 = 左移  ⚠ 占位值，待实测
 
 /*---- 默认路线 ----------------------------------------*/
 
-/* 初赛单程路线（启停区 1 → 读码 → 原料区 → 粗加工区 → 暂存区 → 启停区 1）
-   段值全取上表常量，行注是段末机器人中心的场地坐标
+/* 初赛全程：启停区 1 → 读码 → 第一批（原料区取 / 粗加工区放 / 取回 / 暂存区放）
+   → 回原料区取第二批（粗加工区放 / 取回 / 暂存区码垛）→ 启停区 1
+   位号一律由任务码给出：NAV_SEG_RING 取 task[组][件]，NAV_SEG_STACK 取第一批同色物料的位
+   段值全取上表常量，行尾注是段末机器人中心的场地坐标
    ⚠ 前提：起点 = 启停区 1 中心、机头朝 +X；转向正 = 逆时针（实车反向则 TURN 段取负）
    末段必须是 NAV_SEG_END */
 static const NavSeg_t s_defaultMap[] = {	//地图
-	//① 右移 1050 → (2250,1200)，机头正对右侧二维码板
-	{ NAV_SEG_STRAFE,  (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_LANE,  0 },
-	//② 停车读二维码（视觉模块 2）并把任务码上串口屏
-	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_QR_MS, 0, 0 },
-	//③ 后退 1050 → (1200,1200)，退到十字交点
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_QR_X), NAV_MAP_SPEED_LANE, 0 },
-	//④ 左转 90° → 机头朝 -Y（场地顶边）
-	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	//⑤ 前进 900 → (1200,300)，正对原料区转盘
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },
-	//⑥ 升降轴回零（车停原地；homed 是装载的前置条件，本段不可省）
-	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },
-	//⑦ 视觉对准（视觉模块 1）：把夹持中心对到物料中心，可单独重跑
-	{ NAV_SEG_ALIGN,   0, 0, NAV_ALIGN_TIMEOUT_MS },
-	//⑧ 三轮装载：每轮先对准再抓取，装满 GRIP_LOAD_TOTAL 个才离开原料区
-	{ NAV_SEG_LOAD,    0, 0, NAV_LOAD_TIMEOUT_MS },
-	//⑨ 掉头 180° → 机头朝 +Y（场地底边）
-	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	//⑩ 前进 1800 → (1200,2100)，正对粗加工区
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_LANE, 0 },
-	//⑪ 按任务码顺序放入粗加工区 1~3 号圆环
-	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_PLACE_MS, 0, 0 },
-	//⑫ 掉头 180° → 机头朝 -Y
-	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	//⑬ 前进 900 → (1200,1200)，回到十字交点
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_CROSS_Y), NAV_MAP_SPEED_LANE, 0 },
-	//⑭ 左转 90° → 机头朝 -X（场地左边）
-	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	//⑮ 前进 900 → (300,1200)，正对暂存区
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_DOCK, 0 },
-	//⑯ 放入暂存区 1~3 号圆环
-	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_PLACE_MS, 0, 0 },
-	//⑰ 掉头 180° → 机头朝 +X
-	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },
-	//⑱ 前进 1950 → (2250,1200)，沿横向车道回到右端
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_LANE, 0 },
-	//⑲ 左转 90° → 机头朝 -Y
-	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },
-	//⑳ 前进 1050 → (2250,150)，回到启停区 1
-	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_DOCK, 0 },
-	{ NAV_SEG_END,     0, 0, 0 },
+	/* 启停区 1 → 二维码板：读取任务码 */
+	{ NAV_SEG_STRAFE,  (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_LANE, 0 },	//01 右移 1050 → (2250,1200)，机头正对二维码板
+	{ NAV_SEG_DWELL,   NAV_MAP_DWELL_QR_MS, 0, 0 },	//02 停车读码 + 任务码上屏
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_QR_X), NAV_MAP_SPEED_LANE, 0 },	//03 后退 1050 → (1200,1200) 十字
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },	//04 左转 90° → 机头朝 -Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },	//05 前进 900 → (1200,300) 正对原料区
+
+	/* 第一批：原料区取料（任务码第 1 组） */
+	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },	//06 升降轴回零（装载的前置条件）
+	{ NAV_SEG_ALIGN,   0, 0, NAV_ALIGN_TIMEOUT_MS },	//07 视觉对准（视觉模块 1）
+	{ NAV_SEG_LOAD,    (int16_t)NAV_TASK_G_ORDER1, 0, NAV_LOAD_TIMEOUT_MS },	//08 三轮装载，每轮等色 → 对准 → 抓取
+
+	/* 粗加工区：放第一批（任务码第 2 组） */
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },	//09 掉头 → 机头朝 +Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_LANE, 0 },	//10 前进 1800 → (1200,2100) 正对粗加工区
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 0), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//11 横移到第 1 件的位号
+	{ NAV_SEG_UNLOAD,  1, 0, NAV_UNLOAD_TIMEOUT_MS },	//12 卸第 1 槽
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 1), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//13 横移到第 2 件的位号
+	{ NAV_SEG_UNLOAD,  2, 0, NAV_UNLOAD_TIMEOUT_MS },	//14 卸第 2 槽
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 2), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//15 横移到第 3 件的位号
+	{ NAV_SEG_UNLOAD,  3, 0, NAV_UNLOAD_TIMEOUT_MS },	//16 卸第 3 槽
+
+	/* 粗加工区：取回第一批（同一组位号，按序装回物料盘） */
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 0), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//17 横移到第 1 件的位号
+	{ NAV_SEG_RELOAD,  1, 0, NAV_RELOAD_TIMEOUT_MS },	//18 取回第 1 件
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 1), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//19 横移到第 2 件的位号
+	{ NAV_SEG_RELOAD,  2, 0, NAV_RELOAD_TIMEOUT_MS },	//20 取回第 2 件
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 2), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//21 横移到第 3 件的位号
+	{ NAV_SEG_RELOAD,  3, 0, NAV_RELOAD_TIMEOUT_MS },	//22 取回第 3 件
+
+	/* 暂存区：放第一批（任务码第 2 组、与粗加工区同号） */
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },	//23 掉头 → 机头朝 -Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_CROSS_Y), NAV_MAP_SPEED_LANE, 0 },	//24 前进 900 → (1200,1200)
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },	//25 左转 90° → 机头朝 -X
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_DOCK, 0 },	//26 前进 900 → (300,1200) 正对暂存区
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 0), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//27 横移到第 1 件的位号
+	{ NAV_SEG_UNLOAD,  1, 0, NAV_UNLOAD_TIMEOUT_MS },	//28 卸第 1 槽
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 1), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//29 横移到第 2 件的位号
+	{ NAV_SEG_UNLOAD,  2, 0, NAV_UNLOAD_TIMEOUT_MS },	//30 卸第 2 槽
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS1 * 10 + 2), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//31 横移到第 3 件的位号
+	{ NAV_SEG_UNLOAD,  3, 0, NAV_UNLOAD_TIMEOUT_MS },	//32 卸第 3 槽
+
+	/* 回原料区：取第二批（任务码第 3 组） */
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },	//33 掉头 → 机头朝 +X
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_LANE, 0 },	//34 前进 900 → (1200,1200)
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },	//35 左转 90° → 机头朝 -Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },	//36 前进 900 → (1200,300) 正对原料区
+	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },	//37 升降轴回零（已回零则本段秒过）
+	{ NAV_SEG_ALIGN,   0, 0, NAV_ALIGN_TIMEOUT_MS },	//38 视觉对准
+	{ NAV_SEG_LOAD,    (int16_t)NAV_TASK_G_ORDER2, 0, NAV_LOAD_TIMEOUT_MS },	//39 三轮装载（第二批顺序）
+
+	/* 粗加工区：放第二批（任务码第 4 组） */
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },	//40 掉头 → 机头朝 +Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_LANE, 0 },	//41 前进 1800 → (1200,2100) 正对粗加工区
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS2 * 10 + 0), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//42 横移到第 1 件的位号
+	{ NAV_SEG_UNLOAD,  1, 0, NAV_UNLOAD_TIMEOUT_MS },	//43 卸第 1 槽
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS2 * 10 + 1), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//44 横移到第 2 件的位号
+	{ NAV_SEG_UNLOAD,  2, 0, NAV_UNLOAD_TIMEOUT_MS },	//45 卸第 2 槽
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS2 * 10 + 2), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//46 横移到第 3 件的位号
+	{ NAV_SEG_UNLOAD,  3, 0, NAV_UNLOAD_TIMEOUT_MS },	//47 卸第 3 槽
+
+	/* 粗加工区：取回第二批（同一组位号） */
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS2 * 10 + 0), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//48 横移到第 1 件的位号
+	{ NAV_SEG_RELOAD,  1, 0, NAV_RELOAD_TIMEOUT_MS },	//49 取回第 1 件
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS2 * 10 + 1), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//50 横移到第 2 件的位号
+	{ NAV_SEG_RELOAD,  2, 0, NAV_RELOAD_TIMEOUT_MS },	//51 取回第 2 件
+	{ NAV_SEG_RING,    (int16_t)(NAV_TASK_G_POS2 * 10 + 2), NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//52 横移到第 3 件的位号
+	{ NAV_SEG_RELOAD,  3, 0, NAV_RELOAD_TIMEOUT_MS },	//53 取回第 3 件
+
+	/* 暂存区：第二批码垛（叠到第一批同色物料之上） */
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },	//54 掉头 → 机头朝 -Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_ROU_Y - NAV_MAP_CROSS_Y), NAV_MAP_SPEED_LANE, 0 },	//55 前进 900 → (1200,1200)
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },	//56 左转 90° → 机头朝 -X
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_DOCK, 0 },	//57 前进 900 → (300,1200) 正对暂存区
+	{ NAV_SEG_STACK,   0, NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//58 横移到第 1 件的码垛位
+	{ NAV_SEG_STACKED, 1, 0, NAV_UNLOAD_TIMEOUT_MS },	//59 码垛第 1 槽
+	{ NAV_SEG_STACK,   1, NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//60 横移到第 2 件的码垛位
+	{ NAV_SEG_STACKED, 2, 0, NAV_UNLOAD_TIMEOUT_MS },	//61 码垛第 2 槽
+	{ NAV_SEG_STACK,   2, NAV_MAP_SPEED_DOCK, NAV_RING_TIMEOUT_MS },	//62 横移到第 3 件的码垛位
+	{ NAV_SEG_STACKED, 3, 0, NAV_UNLOAD_TIMEOUT_MS },	//63 码垛第 3 槽
+
+	/* 回启停区 1 */
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_180, 0, NAV_TURN_TIMEOUT_MS },	//64 掉头 → 机头朝 +X
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_LANE, 0 },	//65 前进 1950 → (2250,1200)
+	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },	//66 左转 90° → 机头朝 -Y
+	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_START1_Y), NAV_MAP_SPEED_DOCK, 0 },	//67 前进 1050 → (2250,150) 回到启停区 1
+	{ NAV_SEG_END,     0, 0, 0 },	//68 终点
 };
 
 #define NAV_DEFAULT_NUM		((uint16_t)(sizeof(s_defaultMap) / sizeof(s_defaultMap[0])))	//航段数

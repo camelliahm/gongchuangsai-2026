@@ -11,8 +11,9 @@
 #define NAV_ALIGN_HOLD_CNT	(NAV_ALIGN_HOLD_MS / NAV_CTRL_PERIOD_MS)	//对准保持判据的周期数
 #define NAV_DEG2RAD			(0.01745329252f)	//度 → 弧度
 
-#define NAV_GRIP_FROM_TRAY	(1u)	//取放方向：卸料（物料盘 → 车外目标区）
-#define NAV_GRIP_TO_TRAY	(0u)	//取放方向：取回（车外目标区 → 物料盘）
+#define NAV_GRIP_UNLOAD		(0u)	//取放模式：卸料（物料盘 → 车外目标区，平放）
+#define NAV_GRIP_RELOAD		(1u)	//取放模式：取回（车外目标区 → 物料盘）
+#define NAV_GRIP_STACK		(2u)	//取放模式：码垛卸料（同卸料，放置高度抬一个料高）
 
 /*---- 内部状态 ----------------------------------------*/
 
@@ -44,6 +45,13 @@ static struct {
 
 	//卸载 / 取回段
 	uint8_t			gripStarted;	//1 = 本段已发起取放动作，等序列走完
+
+	//目标区位置横移（RING / STACK）
+	int32_t			segDisp;		//本段位移(mm)：平移段直接取段值，横移段按位号折算
+	uint8_t			ringAt;			//车当前正对的位号(1~3)；区域内的段间保持，离开区域即复位
+
+	//装载段
+	uint8_t			loadGroup;		//本轮装载读哪一组颜色：NAV_TASK_G_ORDER1 / ORDER2
 
 	//任务码（视觉2 上报的 12 位数字，4 组 × 3 位；组序见 nav.h 的 NAV_TASK_G_*）
 	uint8_t			task[NAV_TASK_GROUP_NUM][NAV_TASK_GROUP_LEN];	//各组数字：颜色组为编号 1~6 / 位置组为环号
@@ -279,9 +287,10 @@ static void nav_TaskOrder(void)
 }
 
 /**
- * @brief  本轮的目标颜色：任务码第 1 组里第 (已完成轮数 + 1) 位
+ * @brief  本轮的目标颜色：本轮颜色组里第 (已完成轮数 + 1) 位
  * @retval 颜色代号 1~6；未取到任务码或序号越界时返回 VISION1_COLOR_NONE
- * @note   槽位与轮次同序，故目标色直接取 order[loadCount]，不需按色查表
+ * @note   本轮读哪一组由装载段的段值给定（第一批读第 1 组 / 第二批读第 3 组）；
+ *         槽位与轮次同序，故目标色直接取 task[loadGroup][loadCount]，不需按色查表
  * @author camelliahm
  */
 static uint8_t nav_TargetColor(void)
@@ -291,7 +300,53 @@ static uint8_t nav_TargetColor(void)
 		return (uint8_t)VISION1_COLOR_NONE;
 	}
 
-	return s_nav.task[(uint8_t)NAV_TASK_G_ORDER1][grip.loadCount];
+	return s_nav.task[s_nav.loadGroup][grip.loadCount];
+}
+
+/**
+ * @brief  任务码指定位置：第 group 组第 idx 位
+ * @retval 位置号；未取到任务码或下标越界时返回 0
+ * @author camelliahm
+ */
+static uint8_t nav_TaskRing(uint8_t group, uint8_t idx)
+{
+	if ((s_nav.taskGot == 0u) || (group >= (uint8_t)NAV_TASK_GROUP_NUM)
+			|| (idx >= (uint8_t)NAV_TASK_GROUP_LEN))
+	{
+		return 0u;
+	}
+
+	return s_nav.task[group][idx];
+}
+
+/**
+ * @brief  码垛位：第二批第 k 件颜色在第一批暂存区所占的位置号
+ * @param  k 第二批件序号(0~2)
+ * @retval 位置号(1~3)；0 = 第一批里没有同色物料（任务码异常）
+ * @note   码垛要求"颜色一致"，故按颜色反查第一批的位置，而不是按件序号对应
+ * @author camelliahm
+ */
+static uint8_t nav_StackRing(uint8_t k)
+{
+	uint8_t color;
+	uint8_t j;
+
+	if (k >= (uint8_t)NAV_TASK_GROUP_LEN)
+	{
+		return 0u;
+	}
+
+	color = s_nav.task[(uint8_t)NAV_TASK_G_ORDER2][k];
+
+	for (j = 0u; j < (uint8_t)NAV_TASK_GROUP_LEN; j++)
+	{
+		if (s_nav.task[(uint8_t)NAV_TASK_G_ORDER1][j] == color)
+		{
+			return s_nav.task[(uint8_t)NAV_TASK_G_POS1][j];
+		}
+	}
+
+	return 0u;
 }
 
 /**
@@ -459,16 +514,16 @@ static uint8_t nav_LoadStep(void)
 
 /**
  * @brief  取放段：车外目标区与物料盘之间搬一件，一次一个
- * @param  slot     物料盘槽位(1~GRIP_TRAY_POS_NUM)，由段值给定
- * @param  fromTray NAV_GRIP_FROM_TRAY = 卸料（盘 → 车外）；NAV_GRIP_TO_TRAY = 取回（车外 → 盘）
+ * @param  slot 物料盘槽位(1~GRIP_TRAY_POS_NUM)，由段值给定
+ * @param  mode NAV_GRIP_UNLOAD = 平放卸料；NAV_GRIP_RELOAD = 取回；NAV_GRIP_STACK = 码垛卸料
  * @retval 1 = 本次取放已完成；0 = 进行中或已判故障
  * @note   车须已由上游平移段停在目标区前，本段只管一次取放；
  *         前置条件不满足（状态不符 / 升降轴未回零 / 槽位越界）直接判故障，不重试
  * @author camelliahm
  */
-static uint8_t nav_GripStep(uint8_t slot, uint8_t fromTray)
+static uint8_t nav_GripStep(uint8_t slot, uint8_t mode)
 {
-	bool ok;
+	bool ok = false;
 
 	//机构动作期间车必须停稳
 	chassis.vx = 0;
@@ -476,7 +531,12 @@ static uint8_t nav_GripStep(uint8_t slot, uint8_t fromTray)
 
 	if (s_nav.gripStarted == 0u)
 	{
-		ok = (fromTray != 0u) ? grip_UnloadOnce(slot) : grip_ReloadOnce(slot);
+		switch (mode)
+		{
+		case NAV_GRIP_RELOAD:	ok = grip_ReloadOnce(slot); break;
+		case NAV_GRIP_STACK:	ok = grip_StackOnce(slot);  break;
+		default:				ok = grip_UnloadOnce(slot); break;
+		}
 
 		if (ok == false)
 		{
@@ -503,6 +563,23 @@ static uint8_t nav_GripStep(uint8_t slot, uint8_t fromTray)
 }
 
 /**
+ * @brief  本段类型是否属于"目标区取放"一族（区域内连续横移 / 取放，位号跨段保持）
+ * @retval 1 = 位号沿用；0 = 车已离开目标区，位号复位到入口停靠点
+ * @author camelliahm
+ */
+static uint8_t nav_IsRingFamily(uint8_t type)
+{
+	if ((type == (uint8_t)NAV_SEG_RING) || (type == (uint8_t)NAV_SEG_STACK)
+			|| (type == (uint8_t)NAV_SEG_UNLOAD) || (type == (uint8_t)NAV_SEG_RELOAD)
+			|| (type == (uint8_t)NAV_SEG_STACKED))
+	{
+		return 1u;
+	}
+
+	return 0u;
+}
+
+/**
  * @brief  开始当前航段：记录起点、推出目标航向、清速度、复位本段重试与判据
  * @note   目标航向以"进入本段时的连续航向"为基准，故里程计的绝对漂移不会累积到路线里；
  *         平移段把目标航向锁在当前航向，顺带得到跑偏抑制
@@ -513,6 +590,7 @@ static void nav_SegStart(void)
 	const NavSeg_t *seg = &s_nav.map[s_nav.seg];
 	uint32_t now = xTaskGetTickCount();
 	float offset = 0.0f;
+	uint8_t ring = 0u;
 
 	if (seg->type == NAV_SEG_TURN)
 	{
@@ -535,18 +613,61 @@ static void nav_SegStart(void)
 	s_nav.gripStarted = 0u;
 	s_nav.rxSeen        = vision1_GetSlot()->rxCnt;	//以当前帧为基准，免把旧帧当本轮新帧
 
+	//位号基准：非取放族的那一段意味着车刚进（或刚离开）目标区，位号从入口停靠点重算
+	if (nav_IsRingFamily(seg->type) == 0u)
+	{
+		s_nav.ringAt = (uint8_t)NAV_MAP_RING_DOCK_NUM;
+	}
+
 	//装载的前置条件是升降轴已回零，故进入回零段时触发一次（完成由 aux 侧置 homed）
 	if ((seg->type == NAV_SEG_HOME) && (lift.homed == 0u))
 	{
 		lift_Home();
 	}
 
-	//装载段入口：取任务码第 1 组作为搬运顺序，并清装载计数
+	//装载段入口：按段值定的颜色组取任务码，并清装载计数
 	//（不清则 grip_AllLoaded() 恒真 —— 跑完一批再启动导航，本段会秒过）
 	if (seg->type == NAV_SEG_LOAD)
 	{
+		s_nav.loadGroup = (uint8_t)seg->value;
 		nav_TaskOrder();
 		grip_ResetLoad();
+	}
+
+	//本段位移：平移段直接取段值；目标区横移段按"目标位号 − 当前位号"折算
+	s_nav.segDisp = 0;
+	if ((seg->type == NAV_SEG_FORWARD) || (seg->type == NAV_SEG_STRAFE))
+	{
+		s_nav.segDisp = (int32_t)seg->value;
+	}
+	else if (seg->type == NAV_SEG_RING)
+	{
+		if (s_nav.taskGot == 0u)
+		{
+			nav_TaskOrder();		//段入口没取到任务码：这里再试一次
+		}
+		ring = nav_TaskRing((uint8_t)(seg->value / 10), (uint8_t)(seg->value % 10));
+	}
+	else if (seg->type == NAV_SEG_STACK)
+	{
+		if (s_nav.taskGot == 0u)
+		{
+			nav_TaskOrder();
+		}
+		ring = nav_StackRing((uint8_t)seg->value);
+	}
+
+	if ((seg->type == NAV_SEG_RING) || (seg->type == NAV_SEG_STACK))
+	{
+		if ((ring < 1u) || (ring > (uint8_t)NAV_TASK_GROUP_LEN))
+		{
+			nav_Fault();		//位号取不到 / 越界：任务码不符，不猜
+			return;
+		}
+
+		s_nav.segDisp = ((int32_t)ring - (int32_t)s_nav.ringAt)
+						* (int32_t)NAV_MAP_RING_PITCH_MM * (int32_t)NAV_MAP_RING_DIR;
+		s_nav.ringAt  = ring;
 	}
 
 	//目标航向与 odomYawCont 同在连续域，姿态环可直接相减
@@ -562,7 +683,8 @@ static void nav_SegStart(void)
  * @brief  执行当前航段，本段完成时返回 1
  * @note   转向段只判到位，转角速度由姿态环 PID 产生；平移段按"位移在段方向上的投影"判到位；
  *         回零 / 对准 / 装载三段各自管住自己的重试，段超时只作兜底；
- *         卸载 / 取回两段共用一个取放实现，靠方向参数区分
+ *         卸料 / 取回 / 码垛三段共用一个取放实现，靠模式参数区分；
+ *         横移段与平移段共用到位判据，位移由段值或位号折算给出
  * @author camelliahm
  */
 static uint8_t nav_SegStep(void)
@@ -574,6 +696,7 @@ static uint8_t nav_SegStep(void)
 	float proj;
 	float left;
 	float err;
+	int32_t disp;
 	int16_t v;
 
 	switch (seg->type)
@@ -613,10 +736,13 @@ static uint8_t nav_SegStep(void)
 		return nav_LoadStep();
 
 	case NAV_SEG_UNLOAD:
-		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_FROM_TRAY);
+		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_UNLOAD);
 
 	case NAV_SEG_RELOAD:
-		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_TO_TRAY);
+		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_RELOAD);
+
+	case NAV_SEG_STACKED:
+		return nav_GripStep((uint8_t)seg->value, NAV_GRIP_STACK);
 
 	case NAV_SEG_END:
 	default:
@@ -626,14 +752,17 @@ static uint8_t nav_SegStep(void)
 
 	case NAV_SEG_FORWARD:
 	case NAV_SEG_STRAFE:
+	case NAV_SEG_RING:
+	case NAV_SEG_STACK:
 		break;
 	}
 
 	/* 车体轴在本段起始航向下映射到里程计坐标：
 	 * 前进(+y) → (-sin, cos)，右移(+x) → (cos, sin) */
-	rad = s_nav.startYaw * NAV_DEG2RAD;
-	dx  = chassisDrive.odomX - s_nav.startX;
-	dy  = chassisDrive.odomY - s_nav.startY;
+	rad  = s_nav.startYaw * NAV_DEG2RAD;
+	dx   = chassisDrive.odomX - s_nav.startX;
+	dy   = chassisDrive.odomY - s_nav.startY;
+	disp = s_nav.segDisp;
 
 	if (seg->type == NAV_SEG_FORWARD)
 	{
@@ -644,9 +773,9 @@ static uint8_t nav_SegStep(void)
 		proj = dx * cosf(rad) + dy * sinf(rad);
 	}
 
-	if (seg->value < 0) { proj = -proj; }
+	if (disp < 0) { proj = -proj; }
 
-	left = (float)seg->value;
+	left = (float)disp;
 	if (left < 0.0f) { left = -left; }
 	left -= proj;
 
@@ -659,7 +788,7 @@ static uint8_t nav_SegStep(void)
 
 	//进入减速窗口后降速，减小过冲；到位判据仍按剩余距离
 	v = (left <= (float)NAV_DECEL_MM) ? (int16_t)NAV_DECEL_VEL : seg->speed;
-	if (seg->value < 0) { v = (int16_t)(-v); }
+	if (disp < 0) { v = (int16_t)(-v); }
 
 	if (seg->type == NAV_SEG_FORWARD)
 	{
@@ -733,6 +862,9 @@ void nav_Init(void)
 	s_nav.tryTick     = 0u;
 
 	s_nav.gripStarted = 0u;
+	s_nav.segDisp     = 0;
+	s_nav.ringAt      = (uint8_t)NAV_MAP_RING_DOCK_NUM;
+	s_nav.loadGroup   = (uint8_t)NAV_TASK_G_ORDER1;
 
 	for (i = 0u; i < (uint8_t)NAV_TASK_GROUP_NUM; i++)
 	{
