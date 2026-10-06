@@ -133,10 +133,20 @@ bool lift_IsMoving(void);
 #define GRIP_H_PLACE_MM		(150.0f)	//落盘高度(mm)      ⚠ 占位值，待实测
 #define GRIP_H_SAFE_MM		(200.0f)	//抬升 / 安全高度(mm)  ⚠ 占位值，待实测
 
+/*---- 卸载（把车上物料放回车外目标区）----*/
+/* 复用装载的两个端点角，只是角色对调：车内位取料、车外位放置。
+ * 车怎么停在目标区前由编排层决定（本层只管一次取放），故不需要新的摆位机构 */
+
+#define GRIP_ROT_U_PICK_DEG	(GRIP_ROT_PLACE_DEG)	//卸载取料位(°)：朝车内物料盘，即装载落盘位
+#define GRIP_ROT_U_DROP_DEG	(GRIP_ROT_PICK_DEG)		//卸载放置位(°)：朝车外目标区，即装载取料位
+
+#define GRIP_H_U_PICK_MM	(GRIP_H_PLACE_MM)	//槽内取料高度(mm)：暂沿用落盘高度  ⚠ 待实测，料落槽后或需再降一个料高
+#define GRIP_H_U_DROP_MM	(GRIP_H_PICK_MM)	//车外放置高度(mm)：暂沿用原料区抓取高度  ⚠ 待实测，粗加工区台面高度或不同
+
 #define GRIP_LIFT_VEL		(LIFT_VEL_DEFAULT)	//夹持动作的升降速度(RPM)，沿用升降轴默认
 #define GRIP_LIFT_ACC		(LIFT_ACC_DEFAULT)	//夹持动作的升降加速度(0-255)
 
-#define GRIP_MOVE_TIMEOUT_MS (6000u)	//单个升降动作的超时(ms)
+#define GRIP_MOVE_TIMEOUT_MS (1000u)	//单个升降动作的超时(ms)
 #define GRIP_ROT_TIMEOUT_MS	 (3000u)	//旋转动作的超时(ms)
 #define GRIP_LOAD_TOTAL		 (3u)		//一个原料区需完成的装载轮数
 
@@ -153,6 +163,18 @@ typedef enum {
 	GRIP_LIFT_CLEAR,	//升高让开料盘已放物料
 	GRIP_ROT_SAFE,		//旋转回安全位
 	GRIP_TRAY_HOME,		//物料盘回位置一（仅三轮装满后）
+
+	/*---- 卸载序列（车上物料 → 车外目标区），与装载反向 ----*/
+	GRIP_U_ROT_TRAY,	//转到车内取料位，同时物料盘把待取槽位转到取料点
+	GRIP_U_LOWER,		//下降到槽内取料高度
+	GRIP_U_JAW_CLOSE,	//夹紧
+	GRIP_U_LIFT_UP,		//抬起到安全高度
+	GRIP_U_ROT_DROP,	//转到车外放置位
+	GRIP_U_LOWER_DROP,	//下降到放置高度
+	GRIP_U_JAW_OPEN,	//松开
+	GRIP_U_LIFT_CLEAR,	//升高让开已放物料
+	GRIP_U_ROT_SAFE,	//旋转回安全位（序列完成）
+
 	GRIP_PHASE_NUM
 } GripPhase_t;
 
@@ -161,6 +183,7 @@ typedef struct {
 	uint8_t	 busy;			//1 = 动作序列进行中
 	uint8_t	 fault;			//1 = 本序列因超时 / 被拒绝执行而中断
 	uint8_t	 loadCount;		//已完成的装载轮数（满 GRIP_LOAD_TOTAL 即完成一个原料区）
+	uint8_t	 unloadSlot;		//卸载待取槽位(1~GRIP_TRAY_POS_NUM)
 	float	 rotTarget;		//旋转轴目标角(°)（由斜坡逐步逼近）
 	float	 rotNow;		//旋转轴当前角(°)（斜坡中间值，非舵机反馈）
 	float	 trayTarget;	//物料盘目标角(°)（由斜坡逐步逼近）
@@ -177,6 +200,10 @@ void grip_Safe(void);
 /* 启动一轮装载（取料 → 转 180° 并同步把物料盘转到本轮槽位 → 落到物料盘 → 回安全位）；
  * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零） */
 bool grip_LoadOnce(void);
+
+/* 启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）；
+ * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */
+bool grip_UnloadOnce(uint8_t slot);
 
 //中止动作序列（保持已下发的姿态，不改变旋转轴与夹子）
 void grip_Abort(void);

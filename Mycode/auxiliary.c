@@ -405,6 +405,20 @@ static void grip_Enter(GripPhase_t p)
 	case GRIP_ROT_SAFE:    grip_RotTo(GRIP_ROT_SAFE_DEG);  break;
 	case GRIP_TRAY_HOME:   grip_TrayHome();                break;
 
+	/*---- 卸载序列 ----*/
+	case GRIP_U_ROT_TRAY:	//与物料盘同时起步，两轴并行
+		grip_RotTo(GRIP_ROT_U_PICK_DEG);
+		grip_TrayTo(grip.unloadSlot);
+		break;
+	case GRIP_U_LOWER:      grip_LiftTo(GRIP_H_U_PICK_MM);   break;
+	case GRIP_U_JAW_CLOSE:  grip_SetJaw(true);               break;
+	case GRIP_U_LIFT_UP:    grip_LiftTo(GRIP_H_SAFE_MM);     break;
+	case GRIP_U_ROT_DROP:   grip_RotTo(GRIP_ROT_U_DROP_DEG); break;
+	case GRIP_U_LOWER_DROP: grip_LiftTo(GRIP_H_U_DROP_MM);   break;
+	case GRIP_U_JAW_OPEN:   grip_SetJaw(false);              break;
+	case GRIP_U_LIFT_CLEAR: grip_LiftTo(GRIP_H_SAFE_MM);     break;
+	case GRIP_U_ROT_SAFE:   grip_RotTo(GRIP_ROT_SAFE_DEG);   break;
+
 	default:
 		break;
 	}
@@ -473,6 +487,7 @@ static void grip_Init(void)
 	grip.busy      = 0u;
 	grip.fault     = 0u;
 	grip.loadCount = 0u;
+	grip.unloadSlot = 1u;
 	grip.rotTarget  = GRIP_ROT_SAFE_DEG;
 	grip.rotNow     = GRIP_ROT_SAFE_DEG;
 	grip.trayTarget = GRIP_TRAY_POS1_DEG;
@@ -616,6 +631,100 @@ void grip_Step(void)
 		}
 		break;
 
+	/*---- 卸载序列 ----*/
+	case GRIP_U_ROT_TRAY:
+		//双轴到位才算完：旋转轴到车内取料位，且物料盘已把待取槽位转到取料点
+		if ((grip_Abs(grip.rotNow - GRIP_ROT_U_PICK_DEG) <= GRIP_ROT_TOL_DEG) &&
+			(grip_Abs(grip.trayNow - grip.trayTarget) <= GRIP_TRAY_TOL_DEG))
+		{
+			grip_Enter(GRIP_U_LOWER);
+		}
+		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_U_LOWER:
+		if (lift_IsMoving() == false)
+		{
+			grip_Enter(GRIP_U_JAW_CLOSE);
+		}
+		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_U_JAW_CLOSE:
+		if (grip_Timeout(GRIP_JAW_SETTLE_MS))
+		{
+			grip_Enter(GRIP_U_LIFT_UP);
+		}
+		break;
+
+	case GRIP_U_LIFT_UP:
+		if (lift_IsMoving() == false)
+		{
+			grip_Enter(GRIP_U_ROT_DROP);
+		}
+		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_U_ROT_DROP:
+		if (grip_Abs(grip.rotNow - GRIP_ROT_U_DROP_DEG) <= GRIP_ROT_TOL_DEG)
+		{
+			grip_Enter(GRIP_U_LOWER_DROP);
+		}
+		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_U_LOWER_DROP:
+		if (lift_IsMoving() == false)
+		{
+			grip_Enter(GRIP_U_JAW_OPEN);
+		}
+		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_U_JAW_OPEN:
+		if (grip_Timeout(GRIP_JAW_SETTLE_MS))
+		{
+			grip_Enter(GRIP_U_LIFT_CLEAR);
+		}
+		break;
+
+	case GRIP_U_LIFT_CLEAR:
+		if (lift_IsMoving() == false)
+		{
+			grip_Enter(GRIP_U_ROT_SAFE);
+		}
+		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
+	case GRIP_U_ROT_SAFE:
+		if (grip_Abs(grip.rotNow - GRIP_ROT_SAFE_DEG) <= GRIP_ROT_TOL_DEG)
+		{
+			grip_Abort();	//一次卸载完成，交还控制权
+		}
+		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
+		{
+			grip_Fail();
+		}
+		break;
+
 	default:
 		grip_Abort();
 		break;
@@ -647,6 +756,40 @@ bool grip_LoadOnce(void)
 	grip.fault = 0u;
 	grip.busy  = 1u;
 	grip_Enter(GRIP_ROT_PICK);
+	return true;
+}
+
+/**
+ * @brief  启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）
+ * @param  slot 待取槽位(1~GRIP_TRAY_POS_NUM)
+ * @retval true = 已启动；false = 前置条件不满足
+ * @note   与 grip_LoadOnce() 反向：车须已由编排层停在目标区前，本函数只管一次取放；
+ *         slot 越界（0 或超过槽位数）直接拒绝，调用方据此判故障
+ * @author camelliahm
+ */
+bool grip_UnloadOnce(uint8_t slot)
+{
+	if ((chassis.state != CHS_READY) && (chassis.state != CHS_RUNNING))
+	{
+		return false;
+	}
+	if (grip.busy != 0u)
+	{
+		return false;
+	}
+	if (lift.homed == 0u)
+	{
+		return false;		//未回零：高度基准不可信，拒绝动作
+	}
+	if ((slot < 1u) || (slot > (uint8_t)GRIP_TRAY_POS_NUM))
+	{
+		return false;		//槽位越界：编排出错，不猜
+	}
+
+	grip.fault      = 0u;
+	grip.busy       = 1u;
+	grip.unloadSlot = slot;
+	grip_Enter(GRIP_U_ROT_TRAY);
 	return true;
 }
 

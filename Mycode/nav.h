@@ -15,6 +15,7 @@ typedef enum {
 	NAV_SEG_HOME,		//升降轴回零：车停原地等 lift.homed，value 忽略
 	NAV_SEG_ALIGN,		//视觉对准：读视觉1 相对距离微调底盘，value 忽略
 	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value 忽略
+	NAV_SEG_UNLOAD,		//单次卸载：从物料盘第 value 槽取料并放到车外目标区，value = 槽位(1~3)
 } NavSegType_t;
 
 //航段：位移/转角用 value + 符号表达，speed 只对平移段有效
@@ -64,6 +65,23 @@ typedef enum {
 
 /*---- 回零段（NAV_SEG_HOME）----*/
 #define NAV_HOME_TIMEOUT_MS		(20000u)	//回零段的段超时(ms)：aux 侧的 15s 通常先投 EV_FAULT
+
+/*---- 卸载段（NAV_SEG_UNLOAD）----*/
+#define NAV_UNLOAD_TIMEOUT_MS	(60000u)	//卸载段的段超时(ms)：须覆盖一次完整取放  ⚠ 占位值
+
+/*---- 任务码（视觉2 上报，4 组 × 3 位）----*/
+/* 原文为 12 位数字（如 "156123516231"），组间无分隔符，故按固定位序切分而非按 '+'
+ * 颜色编号 1 红 / 2 黄 / 3 蓝 / 4 绿 / 5 黑 / 6 浅蓝（见 DOC/07 号文档 §3.4） */
+#define NAV_TASK_GROUP_NUM	(4u)	//任务码组数
+#define NAV_TASK_GROUP_LEN	(3u)	//每组位数（须与 GRIP_TRAY_POS_NUM 一致）
+
+#define NAV_TASK_G_ORDER1	(0u)	//第 1 组：第一批三个物料的颜色与搬运顺序
+#define NAV_TASK_G_POS1		(1u)	//第 2 组：第一批物料在粗加工区 / 暂存区的放置位号
+#define NAV_TASK_G_ORDER2	(2u)	//第 3 组：第二批三个物料的颜色与搬运顺序
+#define NAV_TASK_G_POS2		(3u)	//第 4 组：第二批物料在粗加工区的放置位号
+
+#define NAV_TASK_COLOR_MIN	(1u)	//颜色编号下限
+#define NAV_TASK_COLOR_MAX	(6u)	//颜色编号上限
 
 void nav_Init(void);
 

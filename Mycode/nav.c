@@ -39,9 +39,12 @@ static struct {
 	uint8_t			retry;			//本段已重试次数（对准与抓取共用该计数）
 	uint32_t		tryTick;		//本次尝试开始的 tick；重试时重置
 
-	//任务码第 1 组（第一批物料的搬运顺序）：第 k 位 = 第 k 轮要抓的颜色编号（1~6）
-	uint8_t			order[GRIP_TRAY_POS_NUM];	//搬运顺序的颜色编号
-	uint8_t			orderGot;					//1 = 已解析到任务码顺序
+	//卸载段
+	uint8_t			unloadStarted;	//1 = 本段已发起卸载，等序列走完
+
+	//任务码（视觉2 上报的 12 位数字，4 组 × 3 位；组序见 nav.h 的 NAV_TASK_G_*）
+	uint8_t			task[NAV_TASK_GROUP_NUM][NAV_TASK_GROUP_LEN];	//各组数字：颜色组为编号 1~6 / 位置组为环号
+	uint8_t			taskGot;					//1 = 4 组已全部解析通过
 } s_nav;
 
 /**
@@ -192,39 +195,83 @@ static uint8_t nav_AlignStep(void)
 }
 
 /**
- * @brief  解析任务码第 1 组：三个颜色编号即第一批物料的搬运顺序
- * @note   视觉模块 2 上报的是 ASCII 原文（如 "156+123+516+231"），本函数只取
- *         第一个 '+' 之前的至多三位数字；没有新任务码时保留上次结果，
- *         避免视觉短暂丢帧把顺序清成空
+ * @brief  解析任务码：抽出全部数字按每组 3 位切分，校验后写入 s_nav.task
+ * @param  code ASCII 原文  len 有效字符数
+ * @retval 通过校验的组数（全部通过时等于 NAV_TASK_GROUP_NUM，其余情况为 0）
+ * @note   视觉模块 2 上报的是 12 位纯数字（如 "156123516231"），'+' 等分隔符一律跳过，
+ *         故带分隔符的原文同样可解析；颜色组只认 1~6，有任一位越界即整码作废；
+ *         位置组不做范围校验 —— 现场圆环数未定，交由消费方判断
+ * @author camelliahm
+ */
+static uint8_t nav_ParseTask(const char *code, uint8_t len)
+{
+	uint8_t buf[NAV_TASK_GROUP_NUM][NAV_TASK_GROUP_LEN];
+	uint8_t total = (uint8_t)(NAV_TASK_GROUP_NUM * NAV_TASK_GROUP_LEN);
+	uint8_t n = 0u;
+	uint8_t i;
+	uint8_t g;
+	uint8_t k;
+
+	for (i = 0u; (i < len) && (n < total); i++)
+	{
+		if ((code[i] >= '0') && (code[i] <= '9'))
+		{
+			buf[n / NAV_TASK_GROUP_LEN][n % NAV_TASK_GROUP_LEN] = (uint8_t)(code[i] - '0');
+			n++;
+		}
+	}
+
+	if (n < total)
+	{
+		return 0u;		//位数不足：整码作废，保留上次结果
+	}
+
+	for (g = 0u; g < (uint8_t)NAV_TASK_GROUP_NUM; g++)
+	{
+		if ((g != (uint8_t)NAV_TASK_G_ORDER1) && (g != (uint8_t)NAV_TASK_G_ORDER2))
+		{
+			continue;	//位置组不校验范围
+		}
+
+		for (k = 0u; k < (uint8_t)NAV_TASK_GROUP_LEN; k++)
+		{
+			if ((buf[g][k] < (uint8_t)NAV_TASK_COLOR_MIN)
+					|| (buf[g][k] > (uint8_t)NAV_TASK_COLOR_MAX))
+			{
+				return 0u;
+			}
+		}
+	}
+
+	for (g = 0u; g < (uint8_t)NAV_TASK_GROUP_NUM; g++)
+	{
+		for (k = 0u; k < (uint8_t)NAV_TASK_GROUP_LEN; k++)
+		{
+			s_nav.task[g][k] = buf[g][k];
+		}
+	}
+
+	return (uint8_t)NAV_TASK_GROUP_NUM;
+}
+
+/**
+ * @brief  取并解析任务码：4 组全部通过校验才置 taskGot
+ * @note   视觉模块 2 上报的是 ASCII 数字原文（如 "156123516231"）；
+ *         没有新任务码时保留上次结果，避免视觉短暂丢帧把任务清空
  * @author camelliahm
  */
 static void nav_TaskOrder(void)
 {
 	VisionTask_t t;
-	uint8_t i;
-	uint8_t n = 0u;
 
 	if (vision_TakeTask(&t) == false)
 	{
 		return;
 	}
 
-	for (i = 0u; (i < t.len) && (n < (uint8_t)GRIP_TRAY_POS_NUM); i++)
+	if (nav_ParseTask(t.code, t.len) == (uint8_t)NAV_TASK_GROUP_NUM)
 	{
-		if ((t.code[i] >= '1') && (t.code[i] <= '6'))
-		{
-			s_nav.order[n] = (uint8_t)(t.code[i] - '0');
-			n++;
-		}
-		else if (n > 0u)
-		{
-			break;		//第 1 组结束（遇 '+' 或其它分隔符）
-		}
-	}
-
-	if (n == (uint8_t)GRIP_TRAY_POS_NUM)
-	{
-		s_nav.orderGot = 1u;
+		s_nav.taskGot = 1u;
 	}
 }
 
@@ -236,12 +283,12 @@ static void nav_TaskOrder(void)
  */
 static uint8_t nav_TargetColor(void)
 {
-	if ((s_nav.orderGot == 0u) || (grip.loadCount >= (uint8_t)GRIP_TRAY_POS_NUM))
+	if ((s_nav.taskGot == 0u) || (grip.loadCount >= (uint8_t)NAV_TASK_GROUP_LEN))
 	{
 		return (uint8_t)VISION1_COLOR_NONE;
 	}
 
-	return s_nav.order[grip.loadCount];
+	return s_nav.task[(uint8_t)NAV_TASK_G_ORDER1][grip.loadCount];
 }
 
 /**
@@ -261,7 +308,7 @@ static uint8_t nav_ColorWait(void)
 	chassis.vx = 0;
 	chassis.vy = 0;
 
-	if (s_nav.orderGot == 0u)
+	if (s_nav.taskGot == 0u)
 	{
 		nav_TaskOrder();		//段入口没取到任务码：这里再试一次
 	}
@@ -408,6 +455,46 @@ static uint8_t nav_LoadStep(void)
 }
 
 /**
+ * @brief  卸载段：从物料盘第 slot 槽取料并放到车外目标区，一次一个
+ * @param  slot 待取槽位(1~GRIP_TRAY_POS_NUM)，由段值给定
+ * @retval 1 = 本次卸载已完成；0 = 进行中或已判故障
+ * @note   车须已由上游平移段停在目标区前，本段只管一次取放；
+ *         前置条件不满足（状态不符 / 升降轴未回零 / 槽位越界）直接判故障，不重试
+ * @author camelliahm
+ */
+static uint8_t nav_UnloadStep(uint8_t slot)
+{
+	//机构动作期间车必须停稳
+	chassis.vx = 0;
+	chassis.vy = 0;
+
+	if (s_nav.unloadStarted == 0u)
+	{
+		if (grip_UnloadOnce(slot) == false)
+		{
+			nav_Fault();
+			return 0u;
+		}
+
+		s_nav.unloadStarted = 1u;
+		return 0u;
+	}
+
+	if (grip_IsBusy() == true)
+	{
+		return 0u;
+	}
+
+	if (grip.fault != 0u)		//序列内部超时
+	{
+		nav_Fault();
+		return 0u;
+	}
+
+	return 1u;
+}
+
+/**
  * @brief  开始当前航段：记录起点、推出目标航向、清速度、复位本段重试与判据
  * @note   目标航向以"进入本段时的连续航向"为基准，故里程计的绝对漂移不会累积到路线里；
  *         平移段把目标航向锁在当前航向，顺带得到跑偏抑制
@@ -431,13 +518,14 @@ static void nav_SegStart(void)
 	s_nav.segTick  = now;
 
 	//本段的重试与判据都从零开始，段间不继承
-	s_nav.tryTick     = now;
-	s_nav.retry       = 0u;
-	s_nav.alignHold   = 0u;
-	s_nav.loadAligned = 0u;
-	s_nav.loadColored = 0u;
-	s_nav.colorHold   = 0u;
-	s_nav.rxSeen      = vision1_GetSlot()->rxCnt;	//以当前帧为基准，免把旧帧当本轮新帧
+	s_nav.tryTick       = now;
+	s_nav.retry         = 0u;
+	s_nav.alignHold     = 0u;
+	s_nav.loadAligned   = 0u;
+	s_nav.loadColored   = 0u;
+	s_nav.colorHold     = 0u;
+	s_nav.unloadStarted = 0u;
+	s_nav.rxSeen        = vision1_GetSlot()->rxCnt;	//以当前帧为基准，免把旧帧当本轮新帧
 
 	//装载的前置条件是升降轴已回零，故进入回零段时触发一次（完成由 aux 侧置 homed）
 	if ((seg->type == NAV_SEG_HOME) && (lift.homed == 0u))
@@ -514,6 +602,9 @@ static uint8_t nav_SegStep(void)
 
 	case NAV_SEG_LOAD:
 		return nav_LoadStep();
+
+	case NAV_SEG_UNLOAD:
+		return nav_UnloadStep((uint8_t)seg->value);
 
 	case NAV_SEG_END:
 	default:
@@ -607,6 +698,7 @@ static void nav_Begin(void)
 void nav_Init(void)
 {
 	uint8_t i;
+	uint8_t k;
 
 	s_nav.state     = NAV_IDLE;
 	s_nav.map       = s_defaultMap;
@@ -628,11 +720,16 @@ void nav_Init(void)
 	s_nav.retry       = 0u;
 	s_nav.tryTick     = 0u;
 
-	for (i = 0u; i < (uint8_t)GRIP_TRAY_POS_NUM; i++)
+	s_nav.unloadStarted = 0u;
+
+	for (i = 0u; i < (uint8_t)NAV_TASK_GROUP_NUM; i++)
 	{
-		s_nav.order[i] = 0u;
+		for (k = 0u; k < (uint8_t)NAV_TASK_GROUP_LEN; k++)
+		{
+			s_nav.task[i][k] = 0u;
+		}
 	}
-	s_nav.orderGot = 0u;
+	s_nav.taskGot = 0u;
 }
 
 /**
