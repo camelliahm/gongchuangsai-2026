@@ -90,7 +90,7 @@ static void ALL_Init(void)
 	oled_Init();                           // OLED 状态屏（软件 I2C）
 	nav_Init();                            // 编排层：装载默认地图，不自动启动
 	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁
-	contract_Init();                        // 状态机事件队列
+	contract_Init();                       // 状态机事件队列
 	App_TaskCreate();                      // 按任务表创建所有任务
 }
 

@@ -13,7 +13,7 @@ __IO ChassisMotor_t chassisMotor[CHASSIS_MOTOR_NUM];	//四台电机的反馈槽�
 //⚠ 调度器启动前不调用 PID_Calculate()，避免 xTaskGetTickCount() 未就绪
 static PID_TypeDef s_yawPid;			//航向姿态环 PID 实例
 
-#define YAW_PID_KP			(2.0f)		//姿态环比例增益
+#define YAW_PID_KP			(20.0f)		//姿态环比例增益
 #define YAW_PID_KI			(0.0f)		//姿态环积分增益（当前未启用）
 #define YAW_PID_KD			(0.0f)		//姿态环微分增益（当前未启用）
 #define YAW_PID_OUT_MAX		(200.0f)	//姿态修正量上限(0.1度/s 单位)

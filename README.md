@@ -8,6 +8,40 @@
 
 ---
 
+## 0. 构建（三条链路）
+
+三套配置互相独立，任一套能编不代表另两套能编。
+
+| 链路 | 配置文件 | 编译器 | 产物 |
+| --- | --- | --- | --- |
+| Keil | `PRJ/STM32_CAN_CMD.uvprojx` | ARMCC 5 | `PRJ/Objects/STM32F4.axf` |
+| EIDE | `PRJ/.eide/eide.yml` | arm-none-eabi-gcc | `PRJ/build/V1.0/` |
+| **GCC + CMake** | 根目录 `CMakeLists.txt` + `CMakePresets.json` | arm-none-eabi-gcc | `build-gcc/{Debug,Release}/` |
+
+```bash
+# Debug：-Og -g3 -gdwarf-2，日常开发与单步调试
+cmake --preset debug   && cmake --build --preset debug
+# Release：-Os，体积优先
+cmake --preset release && cmake --build --preset release
+```
+
+工具链默认取 `C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin`，
+换机器或换系统用 `-DARM_TOOLCHAIN_DIR=<工具链 bin 目录>` 覆盖；Linux 下留空即从 PATH 查找。
+
+CMake 侧的支撑文件都在 `cmake/`：`arm-none-eabi.cmake`（工具链）、`STM32F407VETx_FLASH.ld`（链接脚本）、
+`startup_stm32f40_41xxx.S`（GCC 语法启动文件，向量表逐项对齐 ARMCC 版）、`syscalls.c`（newlib 裸机桩）。
+
+三处**只能在 CMake 侧**处理的点：
+
+- `-funsigned-char`：ARMCC 的 `char` 默认无符号，GCC 默认有符号。不加这条，`oled_font` 与字符串处理会出现行为差异。
+- `-lm` 必须走 `target_link_libraries`：放进 `target_link_options` 会排在目标文件之前，
+  ld 单遍扫描时 `cosf`/`sinf` 尚未被引用，`libm` 成员不会被拉入 → `undefined reference`。
+- 链接脚本**不能**保留 ST 模板的 `/DISCARD/ { libm.a(*) }`：那条会把整个 `libm` 丢掉，同样导致 `cosf` 未定义。
+
+新增 `.c` 文件时除 Keil/EIDE 的四处登记外，还要加进 `CMakeLists.txt` 对应的 `*_SOURCES` 列表。
+
+---
+
 ## 1. 分层结构
 
 | 文件 | 职责 | 不该放什么 |

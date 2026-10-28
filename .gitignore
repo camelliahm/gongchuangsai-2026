@@ -24,6 +24,11 @@
 !/BSP/
 !/FreeRTOS/
 
+# GCC + CMake 构建（换机器 / 换系统开发时要用，必须入库；产物在 build-gcc/ 自动被忽略）
+!/CMakeLists.txt
+!/CMakePresets.json
+!/cmake/
+
 # 编辑器配置：只纳入 IntelliSense / 调试 / 任务相关的必要配置
 !/.vscode/
 /.vscode/*

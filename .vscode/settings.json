@@ -23,5 +23,7 @@
     },
     "files.associations": {
         "*.h": "c"
-    }
+    },
+    "cmake.sourceDirectory": "D:/LX/Eng_Innovation_Contest/STM32F407_CAN_Position/FreeRTOS/include",
+    "cmake.autoDetectSourceDirectory": false
 }
