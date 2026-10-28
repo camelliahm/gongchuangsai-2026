@@ -2,12 +2,10 @@
     "configurations": [
         {
             "name": "GCC-ARM",
-            // 用 CMake 导出的编译数据库：IntelliSense 与真实编译参数完全一致
             "compileCommands": "${workspaceFolder}/build-gcc/Debug/compile_commands.json",
             "compilerPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gcc.exe",
             "cStandard": "gnu11",
             "intelliSenseMode": "gcc-arm",
-            // 下面两条仅作编译数据库缺失时的兜底
             "includePath": [
                 "${workspaceFolder}/CONTRACT",
                 "${workspaceFolder}/DEVICE",

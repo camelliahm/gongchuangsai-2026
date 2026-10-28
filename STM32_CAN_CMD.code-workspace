@@ -5,37 +5,44 @@
         }
     ],
     "settings": {
-        // 终端不启用 shell integration：避免部分环境下任务输出串行错乱
         "terminal.integrated.shellIntegration.enabled": false,
+        "clangd.arguments": [
+            "--header-insertion=never"
+        ],
         "files.autoGuessEncoding": true,
-        // 构建产物不必出现在资源管理器/搜索结果里
-        "files.exclude": {
-            "**/build-gcc": true
-        },
-        "search.exclude": {
-            "**/build-gcc": true
-        },
+        "C_Cpp.default.configurationProvider": "cl.eide",
+        "C_Cpp.errorSquiggles": "disabled",
         "files.associations": {
+            ".eideignore": "ignore",
+            "*.a51": "a51",
             "*.h": "c",
             "*.c": "c",
-            "*.S": "asm",
-            "*.ld": "linkerscript",
-            "*.jlink": "plaintext"
+            "*.hxx": "cpp",
+            "*.hpp": "cpp",
+            "*.c++": "cpp",
+            "*.cpp": "cpp",
+            "*.cxx": "cpp",
+            "*.cc": "cpp"
         },
-        "cmake.sourceDirectory": "D:/LX/Eng_Innovation_Contest/STM32F407_CAN_Position",
-        "cmake.autoDetectSourceDirectory": false
+        "[yaml]": {
+            "editor.insertSpaces": true,
+            "editor.tabSize": 4,
+            "editor.autoIndent": "advanced"
+        }
     },
     "extensions": {
         "recommendations": [
-            "ms-vscode.cpptools",
-            "marus25.cortex-debug",
-            "cschlosser.doxdocgen",
-            "ms-vscode.vscode-serial-monitor",
+            "cl.eide",
             "keroc.hex-fmt",
-            "dan-c-underwood.arm",
+            "xiaoyongdong.srecord",
+            "hars.cppsnippets",
             "zixuanwang.linkerscript",
             "redhat.vscode-yaml",
-            "IBM.output-colorizer"
+            "IBM.output-colorizer",
+            "cschlosser.doxdocgen",
+            "ms-vscode.vscode-serial-monitor",
+            "dan-c-underwood.arm",
+            "marus25.cortex-debug"
         ]
     }
 }

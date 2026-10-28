@@ -1,13 +1,4 @@
 {
-    // ── 编辑器体验 ────────────────────────────────────────────────
-    // 把编译中间产物从资源管理器里隐藏，只留源码和文档
-    "files.exclude": {
-        "**/build-gcc": true,
-        "**/.cache": true
-    },
-    "search.exclude": {
-        "**/build-gcc": true
-    },
     "files.associations": {
         "*.h": "c"
     },
