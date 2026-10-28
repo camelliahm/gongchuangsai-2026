@@ -20,7 +20,7 @@
         {
             "name": "release",
             "displayName": "GCC Release (-Os)",
-            "description": "体积优先：等价于 Keil 侧 -O1/-O2 的发布构建",
+            "description": "体积优先：-Os，发布构建",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build-gcc/Release",
             "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",

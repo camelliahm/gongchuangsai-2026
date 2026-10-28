@@ -1,0 +1,41 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        // 终端不启用 shell integration：避免部分环境下任务输出串行错乱
+        "terminal.integrated.shellIntegration.enabled": false,
+        "files.autoGuessEncoding": true,
+        // 构建产物不必出现在资源管理器/搜索结果里
+        "files.exclude": {
+            "**/build-gcc": true
+        },
+        "search.exclude": {
+            "**/build-gcc": true
+        },
+        "files.associations": {
+            "*.h": "c",
+            "*.c": "c",
+            "*.S": "asm",
+            "*.ld": "linkerscript",
+            "*.jlink": "plaintext"
+        },
+        "cmake.sourceDirectory": "D:/LX/Eng_Innovation_Contest/STM32F407_CAN_Position",
+        "cmake.autoDetectSourceDirectory": false
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-vscode.cpptools",
+            "marus25.cortex-debug",
+            "cschlosser.doxdocgen",
+            "ms-vscode.vscode-serial-monitor",
+            "keroc.hex-fmt",
+            "dan-c-underwood.arm",
+            "zixuanwang.linkerscript",
+            "redhat.vscode-yaml",
+            "IBM.output-colorizer"
+        ]
+    }
+}

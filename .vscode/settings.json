@@ -1,29 +1,16 @@
 {
-    // ── EIDE ──────────────────────────────────────────────────────
-    // EIDE 只检测"工作区文件夹根层"的 .eide/eide.yml，不递归子目录。
-    // 因此 code-workspace 必须把 PRJ/ 也作为一个工作区文件夹加入，
-    // 否则 EIDE 找不到工程，需要每次手动点"打开项目"。
-    "EIDE.Option.UseTaskToBuild": false,
-    "EIDE.Option.SilentWhenBuildOrFlash": false,
-
     // ── 编辑器体验 ────────────────────────────────────────────────
     // 把编译中间产物从资源管理器里隐藏，只留源码和文档
     "files.exclude": {
-        "**/Objects": true,
-        "**/Listings": true,
-        "**/build": true,
-        "**/.pack": true,
-        "**/*.uvguix.*": true
+        "**/build-gcc": true,
+        "**/.cache": true
     },
     "search.exclude": {
-        "**/Objects": true,
-        "**/Listings": true,
-        "**/build": true,
-        "**/.pack": true
+        "**/build-gcc": true
     },
     "files.associations": {
         "*.h": "c"
     },
-    "cmake.sourceDirectory": "D:/LX/Eng_Innovation_Contest/STM32F407_CAN_Position/FreeRTOS/include",
+    "cmake.sourceDirectory": "D:/LX/Eng_Innovation_Contest/STM32F407_CAN_Position",
     "cmake.autoDetectSourceDirectory": false
 }

@@ -1,20 +1,17 @@
 {
-    // 使用 IntelliSense 了解相关属性。
-    // 悬停以查看现有属性的描述。
-    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    // 调试入口：cortex-debug + GDB，产物来自 CMake（build-gcc/Debug/STM32_CAN_CMD.elf）
+    // gdb 使用官方 Arm GNU Toolchain；GDB Server 用本机已装的工具
     "version": "0.2.0",
     "configurations": [
         {
             // 默认调试入口：OpenOCD + CMSIS-DAP（DAPLink / ST-Link 均走此口）
             "name": "Debug with OpenOCD (CMSIS-DAP)",
             "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/PRJ/build/V1.0/STM32_CAN_CMD.axf",
+            "executable": "${workspaceFolder}/build-gcc/Debug/STM32_CAN_CMD.elf",
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "openocd",
-            // EIDE 自带的 OpenOCD（含 arm-none-eabi-gdb）
-            "armToolchainPath": "C:/Users/LX/.eide/tools/gcc_arm/bin",
-            "gdbPath": "C:/Users/LX/.eide/tools/gcc_arm/bin/arm-none-eabi-gdb.exe",
+            "gdbPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
             "serverpath": "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/bin/openocd.exe",
             "searchDir": [
                 "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/share/openocd/scripts"
@@ -30,12 +27,11 @@
             // ST-Link 专用：OpenOCD 走 stlink 接口
             "name": "Debug with OpenOCD (ST-Link)",
             "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/PRJ/build/V1.0/STM32_CAN_CMD.axf",
+            "executable": "${workspaceFolder}/build-gcc/Debug/STM32_CAN_CMD.elf",
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "openocd",
-            "armToolchainPath": "C:/Users/LX/.eide/tools/gcc_arm/bin",
-            "gdbPath": "C:/Users/LX/.eide/tools/gcc_arm/bin/arm-none-eabi-gdb.exe",
+            "gdbPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
             "serverpath": "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/bin/openocd.exe",
             "searchDir": [
                 "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/share/openocd/scripts"
@@ -48,16 +44,15 @@
             "showDevDebugOutput": "none"
         },
         {
-            // J-Link：用 EIDE 自带的 JLinkGDBServer
+            // J-Link：GDB Server 用本机已装的 JLinkGDBServerCL
             "name": "Debug with J-Link",
             "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/PRJ/build/V1.0/STM32_CAN_CMD.axf",
+            "executable": "${workspaceFolder}/build-gcc/Debug/STM32_CAN_CMD.elf",
             "request": "launch",
             "type": "cortex-debug",
             "servertype": "jlink",
             "serverpath": "C:/Users/LX/.eide/tools/jlink/JLinkGDBServerCL.exe",
-            "armToolchainPath": "C:/Users/LX/.eide/tools/gcc_arm/bin",
-            "gdbPath": "C:/Users/LX/.eide/tools/gcc_arm/bin/arm-none-eabi-gdb.exe",
+            "gdbPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
             "device": "STM32F407VE",
             "interface": "swd",
             "runToEntryPoint": "main",

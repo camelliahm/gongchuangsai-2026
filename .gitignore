@@ -28,6 +28,7 @@
 !/CMakeLists.txt
 !/CMakePresets.json
 !/cmake/
+!/STM32_CAN_CMD.code-workspace
 
 # 编辑器配置：只纳入 IntelliSense / 调试 / 任务相关的必要配置
 !/.vscode/
@@ -37,9 +38,5 @@
 !/.vscode/tasks.json
 !/.vscode/launch.json
 
-!/PRJ/
-/PRJ/*
-!/PRJ/STM32_CAN_CMD.code-workspace
-
-# 以下内容不入版本库：CMSIS、LIB、DRIVERS（第三方库）
-# PRJ 其余内容（构建产物、EIDE 缓存）、PRJ/.vscode（Keil Assistant 自动生成）、DOC、gongchuangsai-2026
+# 以下内容不入版本库：CMSIS、LIB、DRIVERS（第三方库）、DOC、gongchuangsai-2026
+# 构建产物（build-gcc/）由顶部 /* 规则统一忽略

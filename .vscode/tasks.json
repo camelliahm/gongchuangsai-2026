@@ -2,51 +2,61 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "EIDE: 构建",
+            "label": "gcc: configure (debug)",
             "type": "shell",
-            "command": "${command:eide.project.build}",
-            "group": "build",
+            "command": "cmake",
+            "args": ["--preset", "debug"],
+            "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         },
         {
-            "label": "EIDE: 重新构建",
+            "label": "gcc: build (debug)",
             "type": "shell",
-            "command": "${command:eide.project.rebuild}",
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "EIDE: 下载",
-            "type": "shell",
-            "command": "${command:eide.project.uploadToDevice}",
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "EIDE: 构建并下载",
-            "type": "shell",
-            "command": "${command:eide.project.buildAndFlash}",
+            "command": "cmake",
+            "args": ["--build", "--preset", "debug"],
+            "options": { "cwd": "${workspaceFolder}" },
             "group": { "kind": "build", "isDefault": true },
-            "problemMatcher": []
+            "problemMatcher": ["$gcc"]
         },
         {
-            "label": "EIDE: 清理",
+            "label": "gcc: rebuild (debug)",
             "type": "shell",
-            "command": "${command:eide.project.clean}",
+            "command": "cmake",
+            "args": ["--build", "--preset", "debug", "--clean-first"],
+            "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "gcc: build (release)",
+            "type": "shell",
+            "command": "cmake",
+            "args": ["--build", "--preset", "release"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": "build",
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "gcc: clean",
+            "type": "shell",
+            "command": "cmake",
+            "args": ["--build", "--preset", "debug", "--target", "clean"],
+            "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         },
         {
-            "label": "构建（直连 Builder，绕过 EIDE 命令）",
-            "type": "process",
-            "command": "C:\\Users\\LX\\.vscode\\extensions\\cl.eide-3.27.2\\res\\tools\\win32\\unify_builder\\unify_builder.exe",
+            // J-Link 命令行烧写 Debug 产物；脚本见 cmake/flash.jlink
+            "label": "gcc: flash (J-Link)",
+            "type": "shell",
+            "command": "D:/Keil_v5/ARM/Segger/JLink.exe",
             "args": [
-                "-p",
-                "${workspaceFolder}\\PRJ\\build\\V1.0\\builder.params"
+                "-device", "STM32F407VE",
+                "-if", "SWD",
+                "-speed", "4000",
+                "-autoconnect", "1",
+                "-CommanderScript", "cmake/flash.jlink"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}\\PRJ"
-            },
+            "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "problemMatcher": []
         }

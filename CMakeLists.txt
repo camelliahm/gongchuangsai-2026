@@ -1,15 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
 # ---------------------------------------------------------------------------
-# STM32F407VETx + FreeRTOS —— GCC (arm-none-eabi) + CMake 构建
+# STM32F407VETx + FreeRTOS —— 唯一的构建链路：arm-none-eabi-gcc + CMake
 #
-# 与 Keil（PRJ/STM32_CAN_CMD.uvprojx）、EIDE（PRJ/.eide/eide.yml）并行，
-# 三条链路互不干扰：
-#   * Keil          : PRJ/Listings/            （ARMCC + RVDS 移植层 + CMSIS/startup_stm32f40_41xxx.s）
-#   * EIDE          : PRJ/build/V1.0/
-#   * 本文件        : build-gcc/{Debug,Release}/（GCC + GCC 移植层 + cmake/startup_stm32f40_41xxx.S）
-#
-# FreeRTOS-Kernel V11.3.0：内核 FreeRTOS/*.c，GCC 端口 FreeRTOS/portable/GCC/ARM_CM4F。
+# 产物：build-gcc/{Debug,Release}/（elf / hex / bin / map）
+# FreeRTOS-Kernel V11.3.0：内核在 FreeRTOS/*.c，GCC 移植层在 FreeRTOS/portable/GCC/ARM_CM4F
 #
 # 构建：
 #   cmake --preset debug   && cmake --build --preset debug
@@ -18,7 +13,10 @@ cmake_minimum_required(VERSION 3.20)
 
 project(STM32_CAN_CMD LANGUAGES C ASM)
 
-# 未指定构建类型时默认 Debug（-Og -g3），与 Keil -O0 语义接近
+# 导出 compile_commands.json，供 VSCode IntelliSense 用与真实编译完全一致的参数解析
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# 未指定构建类型时默认 Debug（-Og -g3）
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "构建类型" FORCE)
 endif()
@@ -26,7 +24,7 @@ endif()
 set(PROJ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
-# 源文件清单（四层结构；与 Keil 工程收录的 .c 逐个对齐）
+# 源文件清单（四层结构；新增 .c 加进对应 *_SOURCES 即可）
 # ---------------------------------------------------------------------------
 set(APP_SOURCES
     "${PROJ_ROOT}/APP/main.c"
@@ -144,7 +142,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 # ---------------------------------------------------------------------------
-# 预处理宏（与 Keil 的 Define 一致）
+# 预处理宏
 # ---------------------------------------------------------------------------
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     STM32F40_41xxx
@@ -193,7 +191,7 @@ set_source_files_properties(
 
 # ---------------------------------------------------------------------------
 # 链接选项
-#   nano.specs            : 等价 Keil 侧 MicroLIB
+#   nano.specs            : newlib-nano（裁剪版 libc，体积小、无浮点 printf）
 #   syscalls.c            : 自带桩，不引 nosys.specs
 #   no-warn-rwx-segments  : .data 初值镜像与 .text 同在 Flash，ld 会把该 LOAD 段标 RWE
 # ---------------------------------------------------------------------------

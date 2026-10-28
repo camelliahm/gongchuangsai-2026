@@ -10,12 +10,8 @@ static const IRQn_Type            s_irqn[INPUT_NUM]   = { USART1_IRQn,   USART3_
 
 #define INPUT_RING_MASK		(INPUT_RING_SIZE - 1u)	//环形缓冲下标掩码；INPUT_RING_SIZE 必须是 2 的幂
 
-//DMA 目标缓冲（4 字节对齐）；ARMCC 与 GCC 的对齐写法不同，按编译器分支
-#if defined(__CC_ARM)
-__align(4) static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF];	//每通道一块，DMA 直接写入
-#else
-static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF] __attribute__((aligned(4)));	//每通道一块，DMA 直接写入
-#endif
+//DMA 目标缓冲（4 字节对齐，DMA 直接写入）
+static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF] __attribute__((aligned(4)));	//每通道一块
 
 //环形缓冲：head 在中断里写，tail 在任务里读，单生产者/单消费者
 static uint8_t  s_ring[INPUT_NUM][INPUT_RING_SIZE];	//每通道环形缓冲
