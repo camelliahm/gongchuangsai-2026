@@ -78,6 +78,15 @@ set(STUB_SOURCES
 )
 
 # ---------------------------------------------------------------------------
+# Linux 原生底座（替换 STM32 外设的 socketcan / i2c / serial 等实现）
+# ---------------------------------------------------------------------------
+set(DEVICE_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/device/socketcan.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/device/pca9685.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/device/serial.c"
+)
+
+# ---------------------------------------------------------------------------
 # 模拟入口
 # ---------------------------------------------------------------------------
 set(MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/posix_main.c")
@@ -86,6 +95,7 @@ add_executable(posix_sim
     ${MAIN_SOURCE}
     ${APP_SOURCES}
     ${STUB_SOURCES}
+    ${DEVICE_SOURCES}
     ${FREERTOS_SOURCES}
 )
 
@@ -95,6 +105,7 @@ add_executable(posix_sim
 target_include_directories(posix_sim PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"                      # posix/（FreeRTOSConfig.h）
     "${CMAKE_CURRENT_SOURCE_DIR}/stub"                 # stub/stm32f4xx.h 优先于 CMSIS
+    "${CMAKE_CURRENT_SOURCE_DIR}/device"               # socketcan.h 等 Linux 底座
     "${CMAKE_CURRENT_SOURCE_DIR}/freertos-port"        # portmacro.h
     "${CMAKE_CURRENT_SOURCE_DIR}/freertos-port/utils"
     "${PROJ_ROOT}/CONTRACT"
@@ -103,20 +114,14 @@ target_include_directories(posix_sim PRIVATE
     "${PROJ_ROOT}/IFACE"
     "${PROJ_ROOT}/APP"
     "${PROJ_ROOT}/BSP"
-    "${PROJ_ROOT}/CMSIS"
     "${PROJ_ROOT}/DRIVERS"
     "${FREERTOS_ROOT}"
     "${FREERTOS_ROOT}/include"
-    "${PROJ_ROOT}/LIB/STM32F4xx_StdPeriph_Driver/inc"
 )
 
 # ---------------------------------------------------------------------------
-# 预处理宏：POSIX 模拟
+# 预处理宏：无 STM32 相关宏（已彻底脱离 STM32 依赖）
 # ---------------------------------------------------------------------------
-target_compile_definitions(posix_sim PRIVATE
-    STM32F40_41xxx
-    USE_STDPERIPH_DRIVER
-)
 
 # ---------------------------------------------------------------------------
 # 编译选项：本机 gcc，-funsigned-char 与实机一致

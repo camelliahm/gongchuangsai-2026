@@ -2,6 +2,6 @@
     "files.associations": {
         "*.h": "c"
     },
-    "cmake.sourceDirectory": "D:/LX/Eng_Innovation_Contest/STM32F407_CAN_Position",
+    "cmake.sourceDirectory": "/home/camelliahm/桌面/Eng_Innovation_Contest/STM32F407_CAN_Position",
     "cmake.autoDetectSourceDirectory": false
 }
