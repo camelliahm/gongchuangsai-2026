@@ -30,6 +30,10 @@
 !/cmake/
 !/STM32_CAN_CMD.code-workspace
 
+# POSIX 本机模拟（移除 STM32 的验证骨架；源码入库，build/ 构建产物忽略）
+!/posix/
+/posix/build/
+
 # 编辑器配置：只纳入 IntelliSense / 调试 / 任务相关的必要配置
 !/.vscode/
 /.vscode/*
