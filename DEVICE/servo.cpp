@@ -1,9 +1,5 @@
-/* servo.c 的 Linux 实现（PCA9685 底座）
- * 替代 STM32 的 DEVICE/servo.c（TIM3 三路 PWM）。本机不编译 DEVICE/servo.c。
- *
- * 与 STM32 版差异：
- *   - 物理输出：TIM3 CH1/CH2/CH3 写 CCR → PCA9685 写 on/off 计数
- *   - 其余（servo.h 标定宏、角度↔脉宽线性映射）与 STM32 版一字不差。 */
+/* servo.cpp —— 三路舵机的 Linux 实现（PCA9685 底座）
+ * 物理输出走 PCA9685（I2C PWM 驱动芯片），角度↔脉宽线性映射见 servo.h 标定宏。 */
 #include "servo.h"
 #include "pca9685.h"
 

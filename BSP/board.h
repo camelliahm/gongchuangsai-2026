@@ -1,7 +1,7 @@
 #ifndef __BOARD_H
 #define __BOARD_H
 
-#include "stm32f4xx.h"
+#include "types.h"
 
 void nvic_init(void);
 void clock_init(void);

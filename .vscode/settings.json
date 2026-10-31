@@ -2,6 +2,6 @@
     "files.associations": {
         "*.h": "cpp"
     },
-    "cmake.sourceDirectory": "${workspaceFolder}/posix",
+    "cmake.sourceDirectory": "${workspaceFolder}",
     "cmake.autoDetectSourceDirectory": false
 }

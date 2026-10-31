@@ -1,23 +1,20 @@
-/* stm32f4xx.h —— 全工程唯一的 CMSIS 头（已移除真实 CMSIS 目录）
- * 让 board.h / can.h / input.h / servo.h / oled.h / delay.h 这条 include 链编过。
+/* types.h —— 全工程唯一的基础类型头（原 stm32f4xx.h 改名）
+ * 让 board.h / can.h / input.h / servo.h / oled.h 这条 include 链编过。
  * 只定义头文件层用到的少量符号；硬件寄存器访问已随 STM32 底座一并移除。 */
-#ifndef __STM32F4XX_H
-#define __STM32F4XX_H
+#ifndef __TYPES_H
+#define __TYPES_H
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 
-/*---- CMSIS 访问限定宏 ---------------------------------------*/
+/*---- 访问限定宏（原 CMSIS 风格，业务头文件沿用）------------------*/
 #define __I     volatile const   /* 只读 */
 #define __O     volatile         /* 只写 */
 #define __IO    volatile         /* 读写 */
 #define __WEAK  __attribute__((weak))
 
-/*---- 内核时钟（FreeRTOSConfig.h 的 configCPU_CLOCK_HZ 用到）----*/
-#define SystemCoreClock      (168000000UL)
-
-/*---- 枚举 / 标志类型（ST 标准外设库风格，仅占位）------------*/
+/*---- 枚举 / 标志类型（原 ST 标准外设库风格，仅占位）------------*/
 typedef enum { RESET = 0, SET = !RESET } FlagStatus, ITStatus;
 typedef enum { DISABLE = 0, ENABLE = !DISABLE } FunctionalState;
 typedef enum { ERROR = 0, SUCCESS = !ERROR } ErrorStatus;
@@ -49,4 +46,4 @@ typedef struct { uint32_t R; } TIM_TypeDef;
 /*---- 时钟外设（input.h 的 KEY_CLK 宏用到）-------------------*/
 #define RCC_AHB1Periph_GPIOA    ((uint32_t)0x0001)
 
-#endif /* __STM32F4XX_H */
+#endif /* __TYPES_H */

@@ -25,7 +25,7 @@ static void App_TaskCreate(void)
 
 static void ALL_Init(void)
 {
-    board_init();                          /* POSIX 空壳 */
+    board_init();                          /* Linux 下无时钟/GPIO 需配置，空实现 */
     servo_Init();
     input_Init();
     vision_Init();

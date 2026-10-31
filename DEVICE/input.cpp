@@ -1,12 +1,5 @@
-/* input.c 的 Linux 实现（serial 底座）
- * 替代 STM32 的 DEVICE/input.c（三路 USART + DMA + IDLE 中断 + 摁键 GPIO）。
- *
- * 与 STM32 版差异：
- *   - 物理收：USART DMA+IDLE 中断 → serial 轮询读（input_Step 里搬字节进环）
- *   - 物理发：USART_SendData → serial_Write
- *   - 摁键：GPIO 读 → 本机无键，恒不按下（自启动倒计时不推进，与 stub 一致）
- *   - 时基：xTaskGetTickCount → std::chrono::steady_clock 毫秒
- *   其余（环形缓冲、在线判定、摁键消抖逻辑）与 STM32 版一字不差。 */
+/* input.cpp —— 输入汇聚层的 Linux 实现（serial 底座）
+ * 三路串口走 serial 轮询读，环形缓冲 + 在线判定 + 摁键消抖逻辑均在此。 */
 #include "input.h"
 #include "serial.h"
 

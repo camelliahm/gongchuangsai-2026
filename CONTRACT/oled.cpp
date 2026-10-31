@@ -1,6 +1,5 @@
-/* oled_stub.c —— POSIX 模拟层：oled.c 空壳
- * 真实实现见 CONTRACT/oled.c（SSD1306 软 I2C），本机不编译它。
- * OLED 只是给人看，本机模拟无需屏，全部空操作。 */
+/* oled.cpp —— OLED 状态屏（Linux 下空实现）
+ * Linux 上无需 SSD1306 软 I2C 屏，状态显示由串口屏（IFACE/screen.cpp）承担，故全部空操作。 */
 #include "oled.h"
 
 void oled_Init(void)      {}

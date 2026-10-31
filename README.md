@@ -15,9 +15,9 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 配置 | `posix/CMakeLists.txt` |
+| 配置 | `CMakeLists.txt` |
 | 编译器 | 本机 g++（C++17） |
-| 产物 | `posix/build/posix_sim`（本机可执行文件） |
+| 产物 | `build/posix_sim`（本机可执行文件） |
 
 ```bash
 ./build.sh            # Debug：-Og -g3
@@ -25,21 +25,21 @@
 ./build.sh run        # 编译后直接运行
 ```
 
-VSCode 里 `Ctrl+Shift+B` 默认 `posix: build (debug)`；任务面板另有 `posix: build (release)`、`posix: run`、`posix: clean`。
+VSCode 里 `Ctrl+Shift+B` 默认 `build (debug)`；任务面板另有 `build (release)`、`run`、`clean`。
 调试走 `launch.json` 的 `Debug posix_sim (gdb)`（本机 gdb，无交叉编译）。
 
-**工程结构（自研代码）**：业务逻辑源码在 `CONTRACT/ DEVICE/ APP_LOG/ IFACE/ BSP/ DRIVERS/`，
-本机运行所需的硬件空壳与 Linux 底座在 `posix/`：
+**工程结构（自研代码）**：业务逻辑与 Linux 底座统一归入 `CONTRACT/ DEVICE/ APP_LOG/ IFACE/ BSP/ DRIVERS/ include/`：
 
-- `posix/stub/`：硬件空壳（board / can / input / servo / oled / delay）+ 全工程唯一的 `stm32f4xx.h`（占位 CMSIS 头）
-- `posix/device/`：Linux 底座（`socketcan` / `pca9685` / `serial`）
-- `posix/posix_main.cpp`：模拟入口（`ALL_Init()` + 三个 `std::thread`）
+- `BSP/`：板级（`board.cpp` 空实现）、CAN（`can.cpp` + `socketcan` 底座）、`Emm_V5`
+- `DEVICE/`：机构与设备（`chassis_drive` / `lift_axis` / `grip_seq` / `vision`）+ Linux 底座（`serial` / `pca9685`）
+- `include/types.h`：全工程唯一的基础类型头（原 `stm32f4xx.h` 改名）
+- `main.cpp`：入口（`ALL_Init()` + 三个 `std::thread`）
 
 **本机运行无硬件时的表现**：SocketCAN / PCA9685 / 串口打开失败会优雅降级并打 stderr（属预期），
 业务逻辑照常跑。真机（鲁班猫5）上这些设备节点存在即自动生效。
 
-新增 `.cpp` 文件时加进 `posix/CMakeLists.txt` 的 `APP_SOURCES`（`.h` 不用登记）。
-IntelliSense 走 `posix/build/compile_commands.json`（编译时自动导出）。
+新增 `.cpp` 文件时加进 `CMakeLists.txt` 的 `APP_SOURCES`（`.h` 不用登记）。
+IntelliSense 走 `build/compile_commands.json`（编译时自动导出）。
 
 ---
 
@@ -49,14 +49,14 @@ IntelliSense 走 `posix/build/compile_commands.json`（编译时自动导出）�
 | --- | --- | --- |
 | `CONTRACT/contract.h` | **公共契约层**：消息码分段、地址宏、状态/事件枚举、`Chassis_t`、任务参数、`contract_*` 接口 | 各层私有类型与宏 |
 | `CONTRACT/contract.cpp` | **状态机 + 系统级调度**：迁移表、`contract_OnEnter`、消息路由派发、三个任务体、控制环编排 | 任何控制算法 |
-| `CONTRACT/oled.cpp/.h`<br>`CONTRACT/oled_font.h` | **显示层**：SSD1306 128x64 状态屏（软件 I2C，只读黑板，不参与控制） | 状态机迁移、任何控制逻辑 |
+| `CONTRACT/oled.cpp/.h`<br>`CONTRACT/oled_font.h` | **显示层**：SSD1306 128x64 状态屏；Linux 下空实现（状态显示由串口屏 `screen` 承担），只保留接口 | 状态机迁移、任何控制逻辑 |
 | `CONTRACT/PID_Mod.c/.h` | **通用算法层**：PID 控制器（外部移植，只引用不修改，保留 C 语言） | 状态机迁移、硬件访问 |
 | `DEVICE/chassis_drive.cpp/.h` | **底盘驱动层**：四轮动作 / 反馈 / 看门狗 / 停稳判断 + 里程计 / 麦轮逆解 / 姿态环 | 状态机迁移、升降轴 |
 | `DEVICE/lift_axis.cpp/.h` | **升降轴层**：T8 丝杆 + Emm_V5 步进闭环（CAN `0x05`）的指令下发、反馈解析、看门狗与到位判断 | 状态机迁移、底盘四轮 |
 | `DEVICE/grip_seq.cpp/.h` | **夹持机构层**：旋转轴 / 夹子 / 车载物料盘三路舵机 + **装载 / 卸载 / 取回**三条动作序列（`GripPhase_t` 状态机） | 状态机迁移、底盘四轮 |
-| `DEVICE/input.h` | **输入汇聚层（接口）**：三条串口通道 + 摁键（自启动，板内自举的唯一入口）；硬件实现在 `posix/stub/input_stub.cpp`（串口底座） | 帧解析、执行机构、状态机迁移 |
+| `DEVICE/input.h` | **输入汇聚层（接口）**：三条串口通道 + 摁键（自启动，板内自举的唯一入口）；硬件实现在 `DEVICE/input.cpp`（串口底座） | 帧解析、执行机构、状态机迁移 |
 | `DEVICE/vision.cpp/.h` | **视觉层**：两个视觉模块的帧解析（同一种匿名协议精简帧；视觉1 用 `0xF5` 报物块颜色 + 对准相对距离，视觉2 用 `0xF3` / `0xF4`） | 串口硬件、执行机构、状态机迁移 |
-| `DEVICE/servo.h` | **执行机构（PWM）接口**：3 路 50Hz 舵机；**角度语义由 `grip_seq.cpp` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机）。硬件实现在 `posix/stub/servo_stub.cpp`（PCA9685） | 状态机迁移、底盘四轮、舵机角度语义 |
+| `DEVICE/servo.h` | **执行机构（PWM）接口**：3 路 50Hz 舵机；**角度语义由 `grip_seq.cpp` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机）。硬件实现在 `DEVICE/servo.cpp`（PCA9685） | 状态机迁移、底盘四轮、舵机角度语义 |
 | `APP_LOG/nav.cpp/.h` | **编排层（任务层）· 调度与入口**：航段序列驱动、段起点与判据复位、超时重试、对外接口（引擎部分） | 段内控制律、地图数据 |
 | `APP_LOG/nav_priv.h` | **nav 内部头**：`s_nav` 状态结构、内部宏、跨文件函数原型（仅供 `nav*.cpp` 使用） | 对外接口（在 `nav.h`） |
 | `APP_LOG/nav_seg.cpp` | **编排层 · 航段实现**：平移 / 横移到位判据、对准段、装载段、取放段 | 状态机迁移、地图数据 |
@@ -65,12 +65,12 @@ IntelliSense 走 `posix/build/compile_commands.json`（编译时自动导出）�
 | `APP_LOG/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
 | `APP_LOG/avoid.cpp/.h` | **避障层**：读视觉2 的障碍横向偏移，**在 `nav_Step()` 之后**往黑板 `chassis.vx` 上叠加让行分量（只叠加不覆盖） | 状态机迁移、航段序列、直接下发 CAN |
 | `IFACE/auxiliary.cpp/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合 `DEVICE/` 下机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
-| `IFACE/screen.cpp/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；串口硬件在 `input_stub.cpp` | 其他串口通道、状态机迁移 |
+| `IFACE/screen.cpp/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；串口硬件在 `DEVICE/input.cpp` | 其他串口通道、状态机迁移 |
 
-> **目录约定**：自研代码按四层分目录 —— `CONTRACT/`（契约 / 调度 / 显示 / 通用算法）、`DEVICE/`（硬件抽象与机构执行）、
+> **目录约定**：自研代码按分层归位 —— `CONTRACT/`（契约 / 调度 / 显示 / 通用算法）、`DEVICE/`（硬件抽象与机构执行 + Linux 底座 serial/pca9685）、
 > `APP_LOG/`（应用决策，即虚拟上位机 `nav` / 避障层 `avoid`）、`IFACE/`（接入与人机：`auxiliary` / `screen`）。
-> `BSP/` 保留 CAN / 板级头与 Emm_V5 驱动，`DRIVERS/` 保留 fifo 等通用件。
-> 硬件实现（原 `board.cpp` / `can.cpp` / `input.cpp` / `servo.cpp`）已随 STM32 底座移除，对应空壳在 `posix/stub/`。
+> `BSP/` 保留 CAN（socketcan 底座）/ 板级与 Emm_V5 驱动，`DRIVERS/` 保留 fifo 等通用件，`include/` 放 `types.h` 基础类型头。
+> 硬件底座已随 STM32 一并替换为 Linux 实现（`socketcan` / `serial` / `pca9685`），板级 `board.cpp` 为 Linux 空实现。
 
 三层之间**不直接互相调用**，通过两条通道交互：
 
@@ -195,7 +195,7 @@ IntelliSense 走 `posix/build/compile_commands.json`（编译时自动导出）�
 
 ## 3. 启动与任务
 
-`main()`（`posix/posix_main.cpp`）只做两件事：集中初始化 + 创建线程，不含业务逻辑。
+`main()`（`main.cpp`）只做两件事：集中初始化 + 创建线程，不含业务逻辑。
 
 ```
 ALL_Init()       ① 全部初始化（顺序见下表）
@@ -522,7 +522,7 @@ Data[7]     保留填 0
 
 | 项 | 取值 | 宏 |
 | --- | --- | --- |
-| 引脚 | 原 STM32 为 `PA0`；Linux 侧本机无物理键（`input_stub.cpp` 恒不按下），真机按 GPIO 重新映射 | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
+| 引脚 | 原 STM32 为 `PA0`；Linux 侧本机无物理键（`DEVICE/input.cpp` 恒不按下），真机按 GPIO 重新映射 | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
 | 有效电平 | 低电平按下（内部上拉） | `KEY_ACTIVE_LOW` / `KEY_PUPD` |
 | 消抖 | 连续 4 次同电平（控制环 5 ms → 20 ms） | `KEY_DEBOUNCE_CNT` |
 | 延时 | 3000 ms | `KEY_START_DELAY_MS` |
@@ -737,7 +737,7 @@ Data[7]     保留填 0
 
 ### 三条串口的分工
 
-> ⚠ 下表「串口」一行的 USART/DMA/引脚是**原 STM32 硬件接线**，迁移后由 `posix/stub/input_stub.cpp`
+> ⚠ 下表「串口」一行的 USART/DMA/引脚是**原 STM32 硬件接线**，迁移后由 `DEVICE/input.cpp`
 > 的 `serial` 底座接管（多实例 termios 串口）。通道语义（视觉1 / 视觉2 / 串口屏）不变，物理口按鲁班猫5 实际接线重新映射。
 
 | | 视觉模块 1 | 视觉模块 2 | 串口屏 |
@@ -810,15 +810,11 @@ Data[7]     保留填 0
 
 见 `DOC/`（全部为宽幅矢量 `.svg`，1600×1000，可直接缩放）：
 
-> ⚠ **以下 6 张 SVG 仍描述 STM32 + FreeRTOS 旧架构（`.c` 文件、FreeRTOS 任务、USART/DMA/引脚），
-> 尚未随 2026-10-31 的 Linux 迁移同步更新。** 其中「状态机迁移图（02）」和「赛项命题要求（07）」
-> 与底座无关、依然准确；其余 01/03/04/05/06 涉及底座/引脚，需按新架构（std::thread / SocketCAN /
-> PCA9685 / serial）重画后才可信。引用前先核对。
+> 已随 2026-10-31 的 Linux 迁移同步更新，并删减至 3 张 `.svg` + 1 张命题 `.md`：
 
-- `DOC/01_函数调用链与开发落点.svg` —— 启动链 / 三线程 / 控制环编排序列 / CAN 收帧分流 / 开发落点速查（⚠ 待同步）
 - `DOC/02_状态机迁移图.svg` —— 六态迁移 13 条 + 进入动作 + 自动事件与摁键来源（底座无关，仍准确）
-- `DOC/03_代码架构全景图.svg` —— 一页看全：启动链 → 三线程 → CAN 上/下行 → L2 路由表 → 黑板 → 文件分层（⚠ 待同步）
-- `DOC/04_main初始化收敛到ALL_Init.svg` —— `ALL_Init()` 重构对比（⚠ 待同步）
-- `DOC/05_工程进度全景_已建与未建.svg` —— 已接入 / 已建未接入 / 未开始 三列盘点（⚠ 待同步）
-- `DOC/06_引脚分配对应图.svg` —— 引脚与外设分配（⚠ 已随 STM32 移除失效，建议删除）
+- `DOC/03_代码架构全景图.svg` —— 一页看全：启动链 → 三线程 → SocketCAN 上/下行 → L2 路由表 → 黑板 → 文件分层
+- `DOC/05_工程进度全景_已建与未建.svg` —— 已接入 / 已建未接入 / 未开始 三列盘点
 - `DOC/07_智能搬运赛项命题要求.md` —— 赛项比赛流程与运行要求（`nav_map.h` 地图数据的依据，非图，仍准确）
+
+> 原 01（函数调用链）、04（main 初始化收敛）、06（引脚分配）三张已删除：01 内容并入 03，04 因 `main.c` 已删失效，06 因引脚在 Linux 上无意义失效。

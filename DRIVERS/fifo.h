@@ -1,7 +1,7 @@
 #ifndef __FIFO_H
 #define __FIFO_H
 
-#include "stm32f4xx.h"
+#include "types.h"
 
 #ifdef __cplusplus
 extern "C" {

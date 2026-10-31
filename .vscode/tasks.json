@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "posix: build (debug)",
+            "label": "build (debug)",
             "type": "shell",
             "command": "./build.sh",
             "args": ["debug"],
@@ -11,7 +11,7 @@
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "posix: build (release)",
+            "label": "build (release)",
             "type": "shell",
             "command": "./build.sh",
             "args": ["release"],
@@ -20,7 +20,7 @@
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "posix: run",
+            "label": "run",
             "type": "shell",
             "command": "./build.sh",
             "args": ["run"],
@@ -29,10 +29,10 @@
             "problemMatcher": []
         },
         {
-            "label": "posix: clean",
+            "label": "clean",
             "type": "shell",
             "command": "rm",
-            "args": ["-rf", "posix/build"],
+            "args": ["-rf", "build"],
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         }

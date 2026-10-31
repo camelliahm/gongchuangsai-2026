@@ -1,7 +1,7 @@
 #ifndef __SERVO_H
 #define __SERVO_H
 
-#include "stm32f4xx.h"
+#include "types.h"
 
 //舵机 PWM 层：3 路 50Hz PWM（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8），详见 README.md
 

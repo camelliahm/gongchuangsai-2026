@@ -1,7 +1,7 @@
 #ifndef __OLED_FONT_H
 #define __OLED_FONT_H
 
-#include "stm32f4xx.h"
+#include "types.h"
 
 /* OLED 字模库：8x16 ASCII（0x20~0x7E），索引 = 字符 - ' '；取自正点原子 OLED 例程 */
 /* ⚠ 只由 oled.c 包含，用 static 避免多重定义 */

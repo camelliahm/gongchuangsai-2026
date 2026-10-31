@@ -1,5 +1,5 @@
-/* board_stub.c —— POSIX 模拟层：board.c 空壳
- * 真实实现见 BSP/board.c（STM32 时钟/GPIO/NVIC 配置），本机不编译它。 */
+/* board.cpp —— Linux 板级初始化空实现
+ * 时钟 / GPIO / NVIC 在 Linux 上由内核接管，无需配置。 */
 #include "board.h"
 
 void nvic_init(void)   {}

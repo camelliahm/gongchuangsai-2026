@@ -1,11 +1,5 @@
-/* can.cpp 的 Linux 实现（socketcan 底座）
- * 替代 STM32 的 BSP/can.c（CAN1 中断 + 邮箱发送）。本机不编译 BSP/can.c。
- *
- * 与 STM32 版差异：
- *   - 物理收发：STM32 CAN1 邮箱 → socketcan（write/read 内核套接字）
- *   - 中断投递 CAN1_RX0_IRQHandler → socketcan 轮询 recv 后投队列
- *   - 队列/互斥：FreeRTOS 队列 + 互斥锁 → std::mutex + condition_variable + deque
- *   其余（can_SendCmd 分包逻辑）与 STM32 版一字不差。 */
+/* can.cpp —— CAN 链路的 Linux 实现（socketcan 底座）
+ * 物理收发走 socketcan（write/read 内核套接字），帧格式转换、分包、队列语义在此层。 */
 #include "can.h"
 #include "socketcan.h"
 

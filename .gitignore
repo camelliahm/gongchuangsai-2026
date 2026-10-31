@@ -3,6 +3,11 @@
 !/.gitignore
 !/README.md
 !/build.sh
+!/main.cpp
+!/CMakeLists.txt
+
+# 基础类型头（types.h 等）
+!/include/
 
 # 契约与调度层（契约 / 状态机 / 显示 / 通用算法）
 !/CONTRACT/
@@ -16,15 +21,14 @@
 # 接入与人机层（auxiliary / screen）
 !/IFACE/
 
-# 自研应用层（Emm_V5 / can / board 头等）
+# 自研应用层（Emm_V5 / can / board 等）
 !/BSP/
 
 # 驱动（fifo 等）
 !/DRIVERS/
 
-# POSIX 本机模拟（Linux 构建；源码入库，build/ 构建产物忽略）
-!/posix/
-/posix/build/
+# 构建产物忽略
+/build/
 
 # 编辑器配置：只纳入 IntelliSense / 调试 / 任务相关的必要配置
 !/.vscode/

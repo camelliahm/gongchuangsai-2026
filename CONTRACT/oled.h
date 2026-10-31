@@ -1,7 +1,7 @@
 #ifndef __OLED_H
 #define __OLED_H
 
-#include "stm32f4xx.h"
+#include "types.h"
 
 //OLED 显示层：SSD1306 128x64 四针 I2C，软件模拟时序（不占用硬件 I2C、无需延时），详见 README.md
 

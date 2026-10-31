@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 一键编译 POSIX 模拟工程（脱离 STM32，本机 gcc 编过并跑多任务）
+# 一键编译（本机 g++，多线程；已迁离 STM32/FreeRTOS）
 # 用法：./build.sh [debug|release]   （缺省 debug）
 #       ./build.sh run               （编译后直接运行）
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-BUILD_DIR="posix/build"
+BUILD_DIR="build"
 LOG="/tmp/build_posix.log"
 
 # 支持 debug / release / run 三种参数
@@ -23,7 +23,7 @@ case "${1:-debug}" in
 esac
 
 echo "==> 配置构建（${BT}）..."
-cmake -S posix -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${BT}" > "${LOG}" 2>&1
+cmake -S . -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${BT}" > "${LOG}" 2>&1
 
 echo "==> 编译中..."
 cmake --build "${BUILD_DIR}" --clean-first >> "${LOG}" 2>&1

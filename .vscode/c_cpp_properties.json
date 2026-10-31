@@ -1,16 +1,14 @@
 {
     "configurations": [
         {
-            "name": "Linux-posix",
-            "compileCommands": "${workspaceFolder}/posix/build/compile_commands.json",
+            "name": "Linux",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json",
             "compilerPath": "/usr/bin/g++",
             "cStandard": "gnu99",
             "cppStandard": "gnu++17",
             "intelliSenseMode": "linux-gcc-x64",
             "includePath": [
-                "${workspaceFolder}/posix",
-                "${workspaceFolder}/posix/stub",
-                "${workspaceFolder}/posix/device",
+                "${workspaceFolder}/include",
                 "${workspaceFolder}/CONTRACT",
                 "${workspaceFolder}/DEVICE",
                 "${workspaceFolder}/APP_LOG",

@@ -1,12 +1,12 @@
 {
-    // 调试入口：本机 Linux 可执行文件 posix_sim（posix/build/posix_sim）
+    // 调试入口：本机 Linux 可执行文件 posix_sim（build/posix_sim）
     "version": "0.2.0",
     "configurations": [
         {
             "name": "Debug posix_sim (gdb)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/posix/build/posix_sim",
+            "program": "${workspaceFolder}/build/posix_sim",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
