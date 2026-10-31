@@ -10,13 +10,10 @@
             "--header-insertion=never"
         ],
         "files.autoGuessEncoding": true,
-        "C_Cpp.default.configurationProvider": "cl.eide",
+        "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
         "C_Cpp.errorSquiggles": "disabled",
         "files.associations": {
-            ".eideignore": "ignore",
-            "*.a51": "a51",
-            "*.h": "c",
-            "*.c": "c",
+            "*.h": "cpp",
             "*.hxx": "cpp",
             "*.hpp": "cpp",
             "*.c++": "cpp",
@@ -32,17 +29,11 @@
     },
     "extensions": {
         "recommendations": [
-            "cl.eide",
-            "keroc.hex-fmt",
-            "xiaoyongdong.srecord",
-            "hars.cppsnippets",
-            "zixuanwang.linkerscript",
+            "ms-vscode.cpptools",
+            "ms-vscode.cmake-tools",
             "redhat.vscode-yaml",
-            "IBM.output-colorizer",
-            "cschlosser.doxdocgen",
-            "ms-vscode.vscode-serial-monitor",
-            "dan-c-underwood.arm",
-            "marus25.cortex-debug"
+            "hars.cppsnippets",
+            "cschlosser.doxdocgen"
         ]
     }
 }

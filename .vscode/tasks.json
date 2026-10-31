@@ -2,97 +2,38 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "gcc: configure (debug)",
+            "label": "posix: build (debug)",
             "type": "shell",
-            "command": "cmake",
-            "args": ["--preset", "debug"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            "label": "gcc: build (debug)",
-            "type": "shell",
-            "command": "cmake",
-            "args": ["--build", "--preset", "debug"],
+            "command": "./build.sh",
+            "args": ["debug"],
             "options": { "cwd": "${workspaceFolder}" },
             "group": { "kind": "build", "isDefault": true },
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "gcc: rebuild (debug)",
+            "label": "posix: build (release)",
             "type": "shell",
-            "command": "cmake",
-            "args": ["--build", "--preset", "debug", "--clean-first"],
+            "command": "./build.sh",
+            "args": ["release"],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "gcc: build (release)",
+            "label": "posix: run",
             "type": "shell",
-            "command": "cmake",
-            "args": ["--build", "--preset", "release"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "group": "build",
-            "problemMatcher": ["$gcc"]
-        },
-        {
-            "label": "gcc: clean",
-            "type": "shell",
-            "command": "cmake",
-            "args": ["--build", "--preset", "debug", "--target", "clean"],
-            "options": { "cwd": "${workspaceFolder}" },
-            "problemMatcher": []
-        },
-        {
-            // J-Link 命令行烧写 Debug 产物；脚本见 cmake/flash.jlink
-            "label": "gcc: flash (J-Link)",
-            "type": "shell",
-            "command": "D:/Keil_v5/ARM/Segger/JLink.exe",
-            "args": [
-                "-device", "STM32F407VE",
-                "-if", "SWD",
-                "-speed", "4000",
-                "-autoconnect", "1",
-                "-CommanderScript", "cmake/flash.jlink"
-            ],
+            "command": "./build.sh",
+            "args": ["run"],
             "options": { "cwd": "${workspaceFolder}" },
             "group": "build",
             "problemMatcher": []
         },
         {
-            "label": "eide: build",
+            "label": "posix: clean",
             "type": "shell",
-            "command": "${command:eide.project.build}",
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "eide: flash",
-            "type": "shell",
-            "command": "${command:eide.project.uploadToDevice}",
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "eide: build and flash",
-            "type": "shell",
-            "command": "${command:eide.project.buildAndFlash}",
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "eide: rebuild",
-            "type": "shell",
-            "command": "${command:eide.project.rebuild}",
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "eide: clean",
-            "type": "shell",
-            "command": "${command:eide.project.clean}",
-            "group": "build",
+            "command": "rm",
+            "args": ["-rf", "posix/build"],
+            "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": []
         }
     ]

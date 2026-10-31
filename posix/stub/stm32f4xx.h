@@ -1,8 +1,6 @@
-/* stm32f4xx.h —— POSIX 模拟层 stub
- * 仅供 posix/ 目录的本机模拟编译使用，替代真实 CMSIS 头，
- * 让 board.h / can.h / input.h / servo.h / oled.h / delay.h 这条 include 链在本机编过。
- * 只定义头文件层用到的少量符号；真正的硬件寄存器访问在真实 STM32 构建里，
- * 本目录不编译 board.c / can.c / input.c / servo.c / oled.c 等硬件实现。 */
+/* stm32f4xx.h —— 全工程唯一的 CMSIS 头（已移除真实 CMSIS 目录）
+ * 让 board.h / can.h / input.h / servo.h / oled.h / delay.h 这条 include 链编过。
+ * 只定义头文件层用到的少量符号；硬件寄存器访问已随 STM32 底座一并移除。 */
 #ifndef __STM32F4XX_H
 #define __STM32F4XX_H
 

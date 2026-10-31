@@ -1,62 +1,26 @@
 {
-    // 调试入口：cortex-debug + GDB，产物来自 CMake（build-gcc/Debug/STM32_CAN_CMD.elf）
-    // gdb 使用官方 Arm GNU Toolchain；GDB Server 用本机已装的工具
+    // 调试入口：本机 Linux 可执行文件 posix_sim（posix/build/posix_sim）
     "version": "0.2.0",
     "configurations": [
         {
-            // 默认调试入口：OpenOCD + CMSIS-DAP（DAPLink / ST-Link 均走此口）
-            "name": "Debug with OpenOCD (CMSIS-DAP)",
-            "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/build-gcc/Debug/STM32_CAN_CMD.elf",
+            "name": "Debug posix_sim (gdb)",
+            "type": "cppdbg",
             "request": "launch",
-            "type": "cortex-debug",
-            "servertype": "openocd",
-            "gdbPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
-            "serverpath": "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/bin/openocd.exe",
-            "searchDir": [
-                "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/share/openocd/scripts"
-            ],
-            "configFiles": [
-                "interface/cmsis-dap.cfg",
-                "target/stm32f4x.cfg"
-            ],
-            "runToEntryPoint": "main",
-            "showDevDebugOutput": "none"
-        },
-        {
-            // ST-Link 专用：OpenOCD 走 stlink 接口
-            "name": "Debug with OpenOCD (ST-Link)",
+            "program": "${workspaceFolder}/posix/build/posix_sim",
+            "args": [],
+            "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/build-gcc/Debug/STM32_CAN_CMD.elf",
-            "request": "launch",
-            "type": "cortex-debug",
-            "servertype": "openocd",
-            "gdbPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
-            "serverpath": "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/bin/openocd.exe",
-            "searchDir": [
-                "C:/Users/LX/.eide/tools/openocd_7a1adfbec_mingw32/share/openocd/scripts"
-            ],
-            "configFiles": [
-                "interface/stlink.cfg",
-                "target/stm32f4x.cfg"
-            ],
-            "runToEntryPoint": "main",
-            "showDevDebugOutput": "none"
-        },
-        {
-            // J-Link：GDB Server 用本机已装的 JLinkGDBServerCL
-            "name": "Debug with J-Link",
-            "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/build-gcc/Debug/STM32_CAN_CMD.elf",
-            "request": "launch",
-            "type": "cortex-debug",
-            "servertype": "jlink",
-            "serverpath": "C:/Users/LX/.eide/tools/jlink/JLinkGDBServerCL.exe",
-            "gdbPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gdb.exe",
-            "device": "STM32F407VE",
-            "interface": "swd",
-            "runToEntryPoint": "main",
-            "showDevDebugOutput": "none"
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
         }
     ]
 }

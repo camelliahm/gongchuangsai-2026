@@ -4,6 +4,10 @@
 #include "stdint.h"
 #include "Emm_V5.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @brief PID改进算法位掩码枚举
  * @note  通过位或运算组合多个功能，如 Integral_Limit | Derivative_On_Measurement
@@ -168,5 +172,9 @@ void PID_Init(
  * @note   必须按固定周期调用（如1ms一次），双环串级先算外环再算内环
  */
 float PID_Calculate(PID_TypeDef *pid, float measure, float target);
+
+#ifdef __cplusplus
+}
+#endif
 		
 #endif

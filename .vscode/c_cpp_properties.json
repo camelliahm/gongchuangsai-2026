@@ -1,29 +1,22 @@
 {
     "configurations": [
         {
-            "name": "GCC-ARM",
-            "compileCommands": "${workspaceFolder}/build-gcc/Debug/compile_commands.json",
-            "compilerPath": "C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin/arm-none-eabi-gcc.exe",
-            "cStandard": "gnu11",
-            "intelliSenseMode": "gcc-arm",
+            "name": "Linux-posix",
+            "compileCommands": "${workspaceFolder}/posix/build/compile_commands.json",
+            "compilerPath": "/usr/bin/g++",
+            "cStandard": "gnu99",
+            "cppStandard": "gnu++17",
+            "intelliSenseMode": "linux-gcc-x64",
             "includePath": [
+                "${workspaceFolder}/posix",
+                "${workspaceFolder}/posix/stub",
+                "${workspaceFolder}/posix/device",
                 "${workspaceFolder}/CONTRACT",
                 "${workspaceFolder}/DEVICE",
                 "${workspaceFolder}/APP_LOG",
                 "${workspaceFolder}/IFACE",
-                "${workspaceFolder}/APP",
                 "${workspaceFolder}/BSP",
-                "${workspaceFolder}/CMSIS",
-                "${workspaceFolder}/DRIVERS",
-                "${workspaceFolder}/FreeRTOS",
-                "${workspaceFolder}/FreeRTOS/include",
-                "${workspaceFolder}/FreeRTOS/portable/GCC/ARM_CM4F",
-                "${workspaceFolder}/LIB/STM32F4xx_StdPeriph_Driver/inc",
-                "${workspaceFolder}/LIB/STM32F4xx_StdPeriph_Driver/src"
-            ],
-            "defines": [
-                "STM32F40_41xxx",
-                "USE_STDPERIPH_DRIVER"
+                "${workspaceFolder}/DRIVERS"
             ]
         }
     ],

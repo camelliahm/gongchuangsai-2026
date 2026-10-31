@@ -1,5 +1,0 @@
-r
-loadfile build-gcc/Debug/STM32_CAN_CMD.hex
-r
-g
-qc

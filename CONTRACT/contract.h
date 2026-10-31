@@ -109,18 +109,8 @@ typedef struct {
 	int16_t		   vx, vy, w;	//目标底盘速度：vx/vy = mm/s，w = 0.1 度/s
 	float		   yawTarget;	//姿态环给定航向(度，连续域)：编排层写，驱动层读
 
-	uint32_t	   stateTick;	//进入当前状态的 tick
+	uint32_t	   stateTick;	//进入当前状态的时刻（毫秒）
 } Chassis_t;
-
-/*---- 任务参数（实际创建在 APP/main.c 的任务表里，优先级依据见 README.md）----*/
-#define CHASSIS_CTRL_TASK_PRIO		( tskIDLE_PRIORITY + 4 )	//控制环任务优先级（最高，5 ms 硬节拍）
-#define CHASSIS_CTRL_TASK_STACK		( 512 )		//需做浮点运算，栈留大一些
-
-#define CHASSIS_CAN_TASK_PRIO		( tskIDLE_PRIORITY + 3 )	//CAN 接收任务优先级
-#define CHASSIS_CAN_TASK_STACK		( 256 )		//阻塞等接收队列，栈需求小
-
-#define CHASSIS_STATE_TASK_PRIO		( tskIDLE_PRIORITY + 2 )	//状态机任务优先级（最低）
-#define CHASSIS_STATE_TASK_STACK	( 256 )		//阻塞等事件队列，栈需求小
 
 extern __IO Chassis_t chassis;
 
@@ -130,9 +120,9 @@ void contract_HandleFrame(const CAN_Frame_t *f);	//按地址分流：0xFE 消息
 
 void contract_PostEvent(ChassisEvent_t ev, uint32_t param);	//投递状态机事件（非阻塞，队列满丢弃）
 
-void contract_CtrlTask(void *pvParameters);		//控制环任务体：固定 5ms 节拍
-void contract_CanRecvTask(void *pvParameters);	//CAN 接收任务体：阻塞等队列并分流
-void contract_StateTask(void *pvParameters);		//状态机任务体：阻塞等事件，空闲零 CPU
+void contract_CtrlTask(void);		//控制环任务体：固定 5ms 节拍
+void contract_CanRecvTask(void);	//CAN 接收任务体：阻塞等队列并分流
+void contract_StateTask(void);		//状态机任务体：阻塞等事件，空闲零 CPU
 
 void contract_ControlStep(void);					//控制环周期内调用：只做编排，不写控制算法
 

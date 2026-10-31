@@ -3,6 +3,10 @@
 
 #include "can.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define					ABS(x)							((x) > 0 ? (x) : -(x)) 
 
 typedef enum {
@@ -205,5 +209,9 @@ void Emm_V5_MMCL_Read_Sys_Params(uint8_t addr, SysParams_t s);
 /**********************************************************
 *** 读写驱动参数命令
 **********************************************************/
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

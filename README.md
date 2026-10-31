@@ -1,50 +1,45 @@
-# STM32F407 CAN 底盘固件
+# 智能搬运小车固件（鲁班猫5 / Linux）
 
-四轮麦轮小车固件。主控 STM32F407VETx，FreeRTOS，通过 CAN1 与 Emm_V5 / ZDT（张大头）
+四轮麦轮小车固件，目标平台 **鲁班猫5（RK3588，Linux）**。通过 CAN（SocketCAN）与 Emm_V5 / ZDT（张大头）
 步进闭环驱动器通信，并同时在该总线上接收上位机指令。
 
+> 工程原为 STM32F407 + FreeRTOS，已于 2026-10-31 完成迁移：STM32 与 FreeRTOS 全部移除，
+> 任务模型换成 Linux 原生 `std::thread`，硬件底座换成 SocketCAN / PCA9685(I2C) / 串口。
+>
 > 本文只讲**代码架构**：分层、模块契约、消息通路、状态机、协议、扩展落点。
 > 代码注释只讲"这个函数干什么、参数怎么传、有什么坑"；模块定位、分层规则、扩展指引这类说明性内容写在这里。
 
 ---
 
-## 0. 构建（唯一链路：arm-none-eabi-gcc + CMake）
-
-Keil（ARMCC）与 EIDE（AC5）两条链路已于 2026-10-28 移除，工程只保留 GCC。
+## 0. 构建（g++ + CMake，POSIX 模拟）
 
 | 项 | 内容 |
 | --- | --- |
-| 配置 | 根目录 `CMakeLists.txt` + `CMakePresets.json` |
-| 编译器 | arm-none-eabi-gcc（官方 Arm GNU Toolchain） |
-| 产物 | `build-gcc/{Debug,Release}/`（elf / hex / bin / map / compile_commands.json） |
+| 配置 | `posix/CMakeLists.txt` |
+| 编译器 | 本机 g++（C++17） |
+| 产物 | `posix/build/posix_sim`（本机可执行文件） |
 
 ```bash
-# Debug：-Og -g3 -gdwarf-2，日常开发与单步调试
-cmake --preset debug   && cmake --build --preset debug
-# Release：-Os，体积优先
-cmake --preset release && cmake --build --preset release
+./build.sh            # Debug：-Og -g3
+./build.sh release    # Release：-O2
+./build.sh run        # 编译后直接运行
 ```
 
-VSCode 里 `Ctrl+Shift+B` 默认就是 `gcc: build (debug)`；任务面板另有
-`gcc: configure (debug)`、`gcc: rebuild (debug)`、`gcc: build (release)`、`gcc: clean`、`gcc: flash (J-Link)`。
+VSCode 里 `Ctrl+Shift+B` 默认 `posix: build (debug)`；任务面板另有 `posix: build (release)`、`posix: run`、`posix: clean`。
+调试走 `launch.json` 的 `Debug posix_sim (gdb)`（本机 gdb，无交叉编译）。
 
-工具链默认取 `C:/Program Files (x86)/Arm/GNU Toolchain mingw-w64-i686-arm-none-eabi/bin`，
-换机器或换系统用 `-DARM_TOOLCHAIN_DIR=<工具链 bin 目录>` 覆盖；Linux 下留空即从 PATH 查找。
+**工程结构（自研代码）**：业务逻辑源码在 `CONTRACT/ DEVICE/ APP_LOG/ IFACE/ BSP/ DRIVERS/`，
+本机运行所需的硬件空壳与 Linux 底座在 `posix/`：
 
-CMake 侧的支撑文件都在 `cmake/`：`arm-none-eabi.cmake`（工具链）、`STM32F407VETx_FLASH.ld`（链接脚本）、
-`startup_stm32f40_41xxx.S`（GCC 语法启动文件）、`syscalls.c`（newlib 裸机桩）、`flash.jlink`（J-Link 烧写脚本）。
+- `posix/stub/`：硬件空壳（board / can / input / servo / oled / delay）+ 全工程唯一的 `stm32f4xx.h`（占位 CMSIS 头）
+- `posix/device/`：Linux 底座（`socketcan` / `pca9685` / `serial`）
+- `posix/posix_main.cpp`：模拟入口（`ALL_Init()` + 三个 `std::thread`）
 
-三处容易踩的点：
+**本机运行无硬件时的表现**：SocketCAN / PCA9685 / 串口打开失败会优雅降级并打 stderr（属预期），
+业务逻辑照常跑。真机（鲁班猫5）上这些设备节点存在即自动生效。
 
-- `-funsigned-char`：历史上 ARMCC 的 `char` 默认无符号、GCC 默认有符号。不加这条，`oled_font` 与字符串处理行为会变。
-- `-lm` 必须走 `target_link_libraries`：放进 `target_link_options` 会排在目标文件之前，
-  ld 单遍扫描时 `cosf`/`sinf` 尚未被引用，`libm` 成员不会被拉入 → `undefined reference`。
-- 链接脚本**不能**保留 ST 模板的 `/DISCARD/ { libm.a(*) }`：那条会把整个 `libm` 丢掉，同样导致 `cosf` 未定义。
-
-新增 `.c` 文件时只需加进 `CMakeLists.txt` 对应的 `*_SOURCES` 列表（`.h` 不用登记）。
-
-IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参数与真实编译一致；
-若该文件不存在，先跑一次 `gcc: configure (debug)`。
+新增 `.cpp` 文件时加进 `posix/CMakeLists.txt` 的 `APP_SOURCES`（`.h` 不用登记）。
+IntelliSense 走 `posix/build/compile_commands.json`（编译时自动导出）。
 
 ---
 
@@ -53,28 +48,29 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 | 文件 | 职责 | 不该放什么 |
 | --- | --- | --- |
 | `CONTRACT/contract.h` | **公共契约层**：消息码分段、地址宏、状态/事件枚举、`Chassis_t`、任务参数、`contract_*` 接口 | 各层私有类型与宏 |
-| `CONTRACT/contract.c` | **状态机 + 系统级调度**：迁移表、`contract_OnEnter`、消息路由派发、三个任务体、控制环编排 | 任何控制算法 |
-| `CONTRACT/oled.c/.h`<br>`CONTRACT/oled_font.h` | **显示层**：SSD1306 128x64 状态屏（软件 I2C，只读黑板，不参与控制） | 状态机迁移、任何控制逻辑 |
-| `CONTRACT/PID_Mod.c/.h` | **通用算法层**：PID 控制器（外部移植，只引用不修改） | 状态机迁移、硬件访问 |
-| `DEVICE/chassis_drive.c/.h` | **底盘驱动层**：四轮动作 / 反馈 / 看门狗 / 停稳判断 + 里程计 / 麦轮逆解 / 姿态环 | 状态机迁移、升降轴 |
-| `DEVICE/lift_axis.c/.h` | **升降轴层**：T8 丝杆 + Emm_V5 步进闭环（CAN `0x05`）的指令下发、反馈解析、看门狗与到位判断 | 状态机迁移、底盘四轮 |
-| `DEVICE/grip_seq.c/.h` | **夹持机构层**：旋转轴 / 夹子 / 车载物料盘三路舵机 + **装载 / 卸载 / 取回**三条动作序列（`GripPhase_t` 状态机） | 状态机迁移、底盘四轮 |
-| `DEVICE/input.c/.h` | **输入汇聚层**：三条串口的硬件配置、DMA 与字节管道（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ **摁键（自启动，板内自举的唯一入口）** | 帧解析、执行机构、状态机迁移 |
-| `DEVICE/vision.c/.h` | **视觉层**：两个视觉模块的帧解析（同一种匿名协议精简帧；视觉1 用 `0xF5` 报物块颜色 + 对准相对距离，视觉2 用 `0xF3` / `0xF4`） | 串口硬件、执行机构、状态机迁移 |
-| `DEVICE/servo.c/.h` | **执行机构（PWM）**：3 路 50Hz 舵机（TIM3 CH1/CH2/CH3 = PC6/PC7/PC8）；**角度语义由 `grip_seq.c` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机） | 状态机迁移、底盘四轮、舵机角度语义 |
-| `APP_LOG/nav.c/.h` | **编排层（任务层）· 调度与入口**：航段序列驱动、段起点与判据复位、超时重试、对外接口（引擎部分） | 段内控制律、地图数据 |
-| `APP_LOG/nav_priv.h` | **nav 内部头**：`s_nav` 状态结构、内部宏、跨文件函数原型（仅供 `nav*.c` 使用） | 对外接口（在 `nav.h`） |
-| `APP_LOG/nav_seg.c` | **编排层 · 航段实现**：平移 / 横移到位判据、对准段、装载段、取放段 | 状态机迁移、地图数据 |
-| `APP_LOG/nav_align.c` | **编排层 · 对准与挑色**：视觉1 闭环对准、任务码解析、目标色 / 位号查询 | 状态机迁移、直接下发 CAN |
-| `APP_LOG/nav_util.c` | **编排层 · 工具与读接口**：角度折算、绝对值、`nav_Load` / `nav_GetState` / `nav_GetStats` / `nav_GetTaskCode` 等只读接口 | 控制律、状态迁移 |
+| `CONTRACT/contract.cpp` | **状态机 + 系统级调度**：迁移表、`contract_OnEnter`、消息路由派发、三个任务体、控制环编排 | 任何控制算法 |
+| `CONTRACT/oled.cpp/.h`<br>`CONTRACT/oled_font.h` | **显示层**：SSD1306 128x64 状态屏（软件 I2C，只读黑板，不参与控制） | 状态机迁移、任何控制逻辑 |
+| `CONTRACT/PID_Mod.c/.h` | **通用算法层**：PID 控制器（外部移植，只引用不修改，保留 C 语言） | 状态机迁移、硬件访问 |
+| `DEVICE/chassis_drive.cpp/.h` | **底盘驱动层**：四轮动作 / 反馈 / 看门狗 / 停稳判断 + 里程计 / 麦轮逆解 / 姿态环 | 状态机迁移、升降轴 |
+| `DEVICE/lift_axis.cpp/.h` | **升降轴层**：T8 丝杆 + Emm_V5 步进闭环（CAN `0x05`）的指令下发、反馈解析、看门狗与到位判断 | 状态机迁移、底盘四轮 |
+| `DEVICE/grip_seq.cpp/.h` | **夹持机构层**：旋转轴 / 夹子 / 车载物料盘三路舵机 + **装载 / 卸载 / 取回**三条动作序列（`GripPhase_t` 状态机） | 状态机迁移、底盘四轮 |
+| `DEVICE/input.h` | **输入汇聚层（接口）**：三条串口通道 + 摁键（自启动，板内自举的唯一入口）；硬件实现在 `posix/stub/input_stub.cpp`（串口底座） | 帧解析、执行机构、状态机迁移 |
+| `DEVICE/vision.cpp/.h` | **视觉层**：两个视觉模块的帧解析（同一种匿名协议精简帧；视觉1 用 `0xF5` 报物块颜色 + 对准相对距离，视觉2 用 `0xF3` / `0xF4`） | 串口硬件、执行机构、状态机迁移 |
+| `DEVICE/servo.h` | **执行机构（PWM）接口**：3 路 50Hz 舵机；**角度语义由 `grip_seq.cpp` 的夹持机构定义**（CH1 = 旋转轴、CH2 = 夹子、CH3 = 车载物料盘）；量程按通道给（CH3 是 270° 舵机）。硬件实现在 `posix/stub/servo_stub.cpp`（PCA9685） | 状态机迁移、底盘四轮、舵机角度语义 |
+| `APP_LOG/nav.cpp/.h` | **编排层（任务层）· 调度与入口**：航段序列驱动、段起点与判据复位、超时重试、对外接口（引擎部分） | 段内控制律、地图数据 |
+| `APP_LOG/nav_priv.h` | **nav 内部头**：`s_nav` 状态结构、内部宏、跨文件函数原型（仅供 `nav*.cpp` 使用） | 对外接口（在 `nav.h`） |
+| `APP_LOG/nav_seg.cpp` | **编排层 · 航段实现**：平移 / 横移到位判据、对准段、装载段、取放段 | 状态机迁移、地图数据 |
+| `APP_LOG/nav_align.cpp` | **编排层 · 对准与挑色**：视觉1 闭环对准、任务码解析、目标色 / 位号查询 | 状态机迁移、直接下发 CAN |
+| `APP_LOG/nav_util.cpp` | **编排层 · 工具与读接口**：角度折算、绝对值、`nav_Load` / `nav_GetState` / `nav_GetStats` / `nav_GetTaskCode` 等只读接口 | 控制律、状态迁移 |
 | `APP_LOG/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
-| `APP_LOG/avoid.c/.h` | **避障层**：读视觉2 的障碍横向偏移，**在 `nav_Step()` 之后**往黑板 `chassis.vx` 上叠加让行分量（只叠加不覆盖） | 状态机迁移、航段序列、直接下发 CAN |
-| `IFACE/auxiliary.c/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合 `DEVICE/` 下机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
-| `IFACE/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
+| `APP_LOG/avoid.cpp/.h` | **避障层**：读视觉2 的障碍横向偏移，**在 `nav_Step()` 之后**往黑板 `chassis.vx` 上叠加让行分量（只叠加不覆盖） | 状态机迁移、航段序列、直接下发 CAN |
+| `IFACE/auxiliary.cpp/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合 `DEVICE/` 下机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
+| `IFACE/screen.cpp/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；串口硬件在 `input_stub.cpp` | 其他串口通道、状态机迁移 |
 
 > **目录约定**：自研代码按四层分目录 —— `CONTRACT/`（契约 / 调度 / 显示 / 通用算法）、`DEVICE/`（硬件抽象与机构执行）、
 > `APP_LOG/`（应用决策，即虚拟上位机 `nav` / 避障层 `avoid`）、`IFACE/`（接入与人机：`auxiliary` / `screen`）。
-> `APP/` 只保留 `main.c` 与 ST 模板（`stm32f4xx_conf.h`、`stm32f4xx_it.c/.h`）。
+> `BSP/` 保留 CAN / 板级头与 Emm_V5 驱动，`DRIVERS/` 保留 fifo 等通用件。
+> 硬件实现（原 `board.cpp` / `can.cpp` / `input.cpp` / `servo.cpp`）已随 STM32 底座移除，对应空壳在 `posix/stub/`。
 
 三层之间**不直接互相调用**，通过两条通道交互：
 
@@ -97,8 +93,8 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 | 要素 | 内容 | 现状 |
 | --- | --- | --- |
 | **契约** | 地址宏、消息码枚举、消息结构体 —— 集中在 `CONTRACT/contract.h` | 已有 |
-| **节点** | 每个机构 = 一个 `xxx_HandleCmd()` + 一个 `xxx_Step()`，**不新开任务** | 已有（`auxiliary.c` 的 `aux_HandleCmd()` / `aux_Step()` 就是这个形状） |
-| **路由** | 一张 `{ 消息码段 → handler }` 注册表 | **已有**（`contract.c` 的 `s_routeTable[]`，`contract_HandleCmd()` 按段查表派发） |
+| **节点** | 每个机构 = 一个 `xxx_HandleCmd()` + 一个 `xxx_Step()`，**不新开线程** | 已有（`auxiliary.cpp` 的 `aux_HandleCmd()` / `aux_Step()` 就是这个形状） |
+| **路由** | 一张 `{ 消息码段 → handler }` 注册表 | **已有**（`contract.cpp` 的 `s_routeTable[]`，`contract_HandleCmd()` 按段查表派发） |
 | **黑板** | 全局 `chassis` 结构体：编排层写目标，模块写状态 | 已有 |
 | **编排** | 任务层 `nav`：决定机构的组合与先后顺序 | **已建**（已接入控制环） |
 
@@ -121,17 +117,17 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 
 | 场景 | 机制 | 延迟量级 |
 | --- | --- | --- |
-| 同任务、同控制周期内 | **同步派发**（直接调用 handler） | 亚微秒 |
-| 跨执行上下文（CAN 接收任务 → 状态机任务） | **RTOS 队列** | 见下 |
+| 同线程、同控制周期内 | **同步派发**（直接调用 handler） | 亚微秒 |
+| 跨执行上下文（CAN 接收线程 → 状态机线程） | **消息队列**（`std::mutex` + `condition_variable`） | 见下 |
 
 **为什么这里的异步队列几乎不慢**（这是"能不能用异步"的依据）：
 
-- 载荷只有几个字节，`xQueueSend` 的拷贝成本是几十个周期；
-- 本工程所有投递都是"高优先级 → 低优先级"（`CAN_RX`(3)→`STATE`(2)、`CTRL`(4)→`STATE`(2)），
-  `xQueueSend` **不会**触发立即切换；
-- 因此延迟上界是 **发送方本周期的剩余执行时间**，而不是 1 个 tick（1 ms）：
+- 载荷只有几个字节，入队的拷贝成本是几十个周期；
+- 本工程所有投递都是"生产线程 → 消费线程"（`CAN_RX`→`STATE`、`CTRL`→`STATE`），
+  入队**不会**触发阻塞；
+- 因此延迟上界是 **发送方本周期的剩余执行时间**，而不是 1 个调度周期（1 ms）：
   `CAN_RX` 投完立刻回去阻塞 → 几十 µs；`CTRL` 投完跑完本周期 → 百 µs 量级；
-- 即便退到最坏的 1 个 tick，**事件层是低频语义事件**（`EV_ENABLE` / `EV_FAULT` / `EV_ARRIVED`），
+- 即便退到最坏的 1 个调度周期，**事件层是低频语义事件**（`EV_ENABLE` / `EV_FAULT` / `EV_ARRIVED`），
   1 ms 抖动无害 —— 它**不落在 5 ms 控制环的数据通路上**。
 
 > 结论：**异步不是需要回避的成本**。但仍建议"同步为主"——同步可以直接读调用栈调试，
@@ -141,8 +137,7 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 
 1. **总线只传请求，不绕过安全闸门。** handler 可以拒绝请求；"允不允许动"始终由状态机决定
    （`CMD_SET_VEL` 被 `RUNNING` 闸住就是范例）。
-2. **不新增任务。** 一个控制任务按序 tick 各机构 —— `contract_ControlStep()` 已经是这个形状。
-   16 KB 堆撑不住 N 个机构各一个任务。
+2. **不新增线程。** 一个控制线程按序 tick 各机构 —— `contract_ControlStep()` 已经是这个形状。
 3. **同步派发必须同一拍内处理完**，不许留待下一拍。
 4. **持续状态走黑板，不走消息。** 位姿、位置、电机状态这类"随时可读"的量放结构体；
    消息只承载"瞬时意图"。混用会让队列要么丢帧、要么被状态刷新刷爆。
@@ -153,8 +148,8 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 ### 2.5 新增模块的四个动作
 
 1. **申请消息码** —— 在对应段里加一个枚举（`contract.h`）
-2. **实现 handler + step** —— `xxx_HandleCmd()` / `xxx_Step()`，**新建设备模块文件**（`DEVICE/` 下），再由 `IFACE/auxiliary.c` 这类接入层聚合
-3. **注册到路由表** —— 在 `contract.c` 的 `s_routeTable[]` 加一行（段基址 + 段掩码 + 该模块的 handler）；不属于任何已注册段的消息会被忽略并累加 `chassis.evtIgnored`
+2. **实现 handler + step** —— `xxx_HandleCmd()` / `xxx_Step()`，**新建设备模块文件**（`DEVICE/` 下），再由 `IFACE/auxiliary.cpp` 这类接入层聚合
+3. **注册到路由表** —— 在 `contract.cpp` 的 `s_routeTable[]` 加一行（段基址 + 段掩码 + 该模块的 handler）；不属于任何已注册段的消息会被忽略并累加 `chassis.evtIgnored`
 4. **在 `contract_OnEnter()` 登记状态动作** —— IDLE 失能、FAULT/ESTOP 安全停
    （**与接口无关，这一步一直都要做**）
 
@@ -169,7 +164,7 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 **代价**
 
 - 调试路径变长：调用栈多跨一层派发器；
-- 跨任务的那部分时序不可复现（同步部分不受影响）；
+- 跨线程的那部分时序不可复现（同步部分不受影响）；
 - **注册表要维护**：漏注册 = 模块静默不响应 —— 建议注册表带计数校验或逐个断言；
 - 若用裸字节传参会丢失编译期类型检查 —— 因此第 5 条边界要求用结构体。
 
@@ -180,7 +175,7 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 
 | | 真 ROS / ROS 2 | 本方案 |
 | --- | --- | --- |
-| 传输 | DDS over UDP | 直接函数调用 + 少量 RTOS 队列 |
+| 传输 | DDS over UDP | 直接函数调用 + 少量消息队列 |
 | 节点发现 | 运行期动态发现 | 编译期静态注册 |
 | 序列化 | IDL 生成 | 不需要（同一地址空间） |
 | 跨节点 | 支持多机 | 仅单芯片 |
@@ -200,39 +195,38 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 
 ## 3. 启动与任务
 
-`main()` 只做两件事：集中初始化 + 启动调度器，不含业务逻辑。
+`main()`（`posix/posix_main.cpp`）只做两件事：集中初始化 + 创建线程，不含业务逻辑。
 
 ```
-ALL_Init()            ① 全部初始化（顺序见下表）
-vTaskStartScheduler() ② 启动调度器（不返回）
+ALL_Init()       ① 全部初始化（顺序见下表）
+App_TaskCreate() ② 创建三个 std::thread 并 join（等价原调度器不返回）
 ```
 
 `ALL_Init()` 内部按依赖顺序展开：
 
 | 序 | 调用 | 作用 |
 | --- | --- | --- |
-| 1 | `board_init()` | 硬件初始化（NVIC、时钟、GPIO、CAN） |
-| 2 | `servo_Init()` | 三路舵机 PWM（TIM3 CH1~CH3）— 三路语义都已由夹持机构下发（旋转轴 / 夹子 / 车载物料盘） |
-| 3 | `input_Init()` | 三条串口（USART1 视觉1 / USART3 视觉2 / USART2 串口屏）+ 摁键 GPIO；**只配硬件与字节管道，不做任何帧解析** — 三条通道的解析都已接入（`vision1_Step()` / `vision_Step()` / `screen_Step()`） |
+| 1 | `board_init()` | 板级空壳（POSIX 下为空；真机为 GPIO/时钟） |
+| 2 | `servo_Init()` | 三路舵机 PWM（PCA9685）— 三路语义都已由夹持机构下发（旋转轴 / 夹子 / 车载物料盘） |
+| 3 | `input_Init()` | 三条串口（视觉1 / 视觉2 / 串口屏）+ 摁键；**只配硬件与字节管道，不做任何帧解析** — 三条通道的解析都已接入（`vision1_Step()` / `vision_Step()` / `screen_Step()`） |
 | 4 | `vision_Init()` | 视觉 1 / 2 的帧槽位与组帧状态归零（须在 `input_Init()` 之后） |
-| 5 | `screen_Init()` | 串口屏上报事件槽位与收帧状态归零（USART2 硬件在 `input_Init()`） |
-| 6 | `oled_Init()` | OLED 状态屏（软件 I2C）；周期刷新由 STATE 任务调 `oled_Step()` |
+| 5 | `screen_Init()` | 串口屏上报事件槽位与收帧状态归零 |
+| 6 | `oled_Init()` | OLED 状态屏（软件 I2C）；周期刷新由 STATE 线程调 `oled_Step()` |
 | 7 | `nav_Init()` | 编排层：装载默认地图，不自动启动（启动由进入 RUNNING 触发） |
-| 8 | `can_RtosInit()` | 建 CAN 接收队列 + 发送互斥锁 |
+| 8 | `can_RtosInit()` | 建 CAN 接收队列 + 发送互斥锁（SocketCAN） |
 | 9 | `contract_Init()` | 建事件队列 → `chassis_DriveInit()` + `aux_Init()` + `avoid_Init()` |
-| 10 | `App_TaskCreate()` | 按任务表 `s_tasks[]` 建任务 |
 
-第 1 项须最先执行 —— 后序模块的时钟与 GPIO 由它打开；第 8~10 项须在建任务之前
-—— 任务一起来就立刻用队列和互斥锁。
+第 1 项须最先执行 —— 后序模块的时钟与 GPIO 由它打开；第 8~9 项须在建线程之前
+—— 线程一起来就立刻用队列和互斥锁。
 
-| 任务 | 优先级 | 栈（字） | 入口 | 职责 |
-| --- | --- | --- | --- | --- |
-| `CTRL` | 4 | 512 | `contract_CtrlTask` | 5 ms 绝对节拍，每拍调 `contract_ControlStep()` |
-| `CAN_RX` | 3 | 256 | `contract_CanRecvTask` | 阻塞 `can_RecvFrame()` 取帧 → `contract_HandleFrame()` 分流 |
-| `STATE` | 2 | 256 | `contract_StateTask` | 带超时等事件 → `contract_Step()` 查表迁移；超时走 `contract_UiStep()` 刷屏 + `oled_Step()` 刷状态页（本任务兼作低速后台） |
+| 线程 | 入口 | 职责 |
+| --- | --- | --- |
+| `tCtrl` | `contract_CtrlTask` | 5 ms 绝对节拍（`sleep_until`），每拍调 `contract_ControlStep()` |
+| `tCanRx` | `contract_CanRecvTask` | 阻塞 `can_RecvFrame()` 取帧 → `contract_HandleFrame()` 分流 |
+| `tState` | `contract_StateTask` | 带超时等事件 → `contract_Step()` 查表迁移；超时走 `contract_UiStep()` 刷屏 + `oled_Step()` 刷状态页（本线程兼作低速后台） |
 
-急停为什么快：`CAN_RX` 优先级高于 `STATE`，帧一到就抢占运行，投完事件 `STATE`
-立即就绪；`CTRL` 每 5 ms 只占极短时间。最坏等待 = 一次控制脉冲（几十 µs 量级）。
+急停为什么快：`tCanRx` 与 `tState` 是独立线程，帧一到就投事件；`tCtrl` 每 5 ms 只占极短时间。
+最坏等待 = 一次控制脉冲（几十 µs 量级）。
 
 控制环周期定 5 ms（200 Hz）而非 1 ms：四轮闭环在驱动器内部完成，MCU 无需高频闭合；
 且 1 ms × 4 台电机 = 4000 帧/s，已超出 500 kbit/s 总线约 3817 帧/s 的物理上限。
@@ -252,15 +246,15 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | `0x00` | ZDT **广播地址** | **禁止占用**，收到一律忽略 |
 | 其它 | 无关帧 | 忽略 |
 
-> **本表只描述"挂在 CAN1 上"的设备。** 目前只有步进类（四轮 + 升降丝杆）走 CAN。
+> **本表只描述"挂在 CAN 总线上"的设备。** 目前只有步进类（四轮 + 升降丝杆）走 CAN。
 > 后续若新增非 CAN 机构（PWM / GPIO / 串口），不占这里的地址，也不进
 > `contract_HandleFrame()` 的分流。
 
 **升降轴为什么挂在同一条总线上**：四轮下发 800 帧/s + 反馈 200 帧/s，加升降轴约
-225 帧/s，合计约 1225 帧/s ≈ 32%，远低于物理上限，无需第二路 CAN 分流。上 CAN2 要改
-`can.c` 里全部硬编码的 `CAN1`、划分过滤器 bank、加第二路收发器与终端电阻，收益仅为
-"物理隔离"，不划算。**若日后升降大功率动作导致总线误码（观察 `can_TxDropCount` 异常
-增长），再考虑拆分独立总线。**
+225 帧/s，合计约 1225 帧/s ≈ 32%，远低于物理上限，无需第二路 CAN 分流。物理层为
+SocketCAN（`can0`），上第二路总线要再开一个 SocketCAN 口 + 加第二路收发器与终端电阻，
+收益仅为"物理隔离"，不划算。**若日后升降大功率动作导致总线误码（观察 `can_TxDropCount`
+异常增长），再考虑拆分独立总线。**
 
 ### 消息码表（`Data[0]` = 消息码，`Data[1..]` = 参数；即原"上位机指令功能码"）
 
@@ -307,7 +301,7 @@ Data[7]     保留填 0
 > 脉冲字段单帧最多 `65535` 脉冲 ≈ **41 mm**，走满行程要连发好几条。`0x25` 把单位
 > 换成 0.1 mm，一次到位。
 
-**C 侧控制接口**（`DEVICE/lift_axis.c`，两套并存）：
+**C 侧控制接口**（`DEVICE/lift_axis.cpp`，两套并存）：
 
 | 函数 | 单位 | 说明 |
 | --- | --- | --- |
@@ -341,19 +335,19 @@ Data[7]     保留填 0
   `lift_MoveToMM()`、`lift_MoveByMM()`、`lift_GetHeightMM()`、`lift_Home()`、`lift_StopNow()`、
   `lift_SetZero()`、`lift_ClearClog()`、`lift_IsMoving()`。
 
-### 夹持机构（`grip_seq.c`，旋转轴 + 夹子 + 车载物料盘）
+### 夹持机构（`grip_seq.cpp`，旋转轴 + 夹子 + 车载物料盘）
 
 **无水平伸缩机构**：水平那一维没有机构可挂，只能由**底盘全向移动 + 视觉1 距离闭环**代偿
 （落在编排层的对准段）；机构侧只有**升降**（复用升降轴）与**180° 旋转**两个自由度。
 
 | 项 | 取值 / 说明 |
 | --- | --- |
-| 旋转轴 | `servo_SetAngle(0, …)` = TIM3 **CH1**（PC6） |
-| 夹子 | `servo_SetAngle(1, …)` = TIM3 **CH2**（PC7） |
+| 旋转轴 | `servo_SetAngle(0, …)` = CH1（PCA9685 通道 0） |
+| 夹子 | `servo_SetAngle(1, …)` = CH2（PCA9685 通道 1） |
 | 端点角 | `GRIP_ROT_PICK_DEG = 0°`（取料位，朝原料区）、`GRIP_ROT_PLACE_DEG = 180°`（落盘位，朝车上物料盘） |
 | 安全位 | `GRIP_ROT_SAFE_DEG = 90°`（两工位中间）——上电姿态与**急停 / 故障 / IDLE 姿态** |
 | 斜坡 | 两轴**都必须限速**：`grip_RotTo()` / `grip_TrayTo()` 只记目标，`rot_Step()` / `tray_Step()` 每控制周期各逼近一步（`GRIP_ROT_SLEW_DEG` / `GRIP_TRAY_SLEW_DEG`，占位 1.0°/周期 → 180° 约 0.9 s、240° 约 1.2 s），**不可一次给大目标差** |
-| 车载物料盘 | `servo_SetAngle(2, …)` = TIM3 **CH3**（PC8），**270° 舵机** —— 量程按通道单独标定（`servo.h` 的 `SERVO_*_CH3`），否则 240° 会被截断到 180° |
+| 车载物料盘 | `servo_SetAngle(2, …)` = CH3（PCA9685 通道 2），**270° 舵机** —— 量程按通道单独标定（`servo.h` 的 `SERVO_*_CH3`），否则 240° 会被截断到 180° |
 | 三个槽位 | `GRIP_TRAY_POS1/2/3_DEG = 0° / 120° / 240°`；**槽位角即指令角**，机械上把槽位 k 装成该角正对落料点 —— 任务码顺序第 k 位就落进槽位 k |
 | 换批复位 | 装满 `GRIP_LOAD_TOTAL` 轮后自动转回位置一（`GRIP_TRAY_HOME` 阶段）；装载段入口的 `grip_ResetLoad()` 也会顺带归位 |
 
@@ -411,7 +405,7 @@ Data[7]     保留填 0
 ## 5. 状态机
 
 六个状态：`IDLE` / `READY` / `RUNNING` / `BRAKING` / `FAULT` / `ESTOP`。
-纯数据驱动，迁移规则在 `contract.c` 的 `s_transTable[]`。
+纯数据驱动，迁移规则在 `contract.cpp` 的 `s_transTable[]`。
 
 | 当前状态 | 事件 | 目标状态 |
 | --- | --- | --- |
@@ -451,8 +445,8 @@ Data[7]     保留填 0
 | FAULT / ESTOP | `Stop_Now` 立即停止 + `faultCnt++` | 断使能（**不是** `Stop_Now`，见 §7） | **安全姿态**（同上） |
 
 > ⚠ **BRAKING 的减速由控制环执行，不在 `contract_OnEnter()` 里**：`contract_ControlStep()`
-> 在 BRAKING 分支里每周期调 `chassis_BrakeWheels()` 下发零速。只发一次是不够的 —— 状态机任务
-> 优先级低于控制环，存在"控制环已进入 `chassis_DriveStep()` 下发旧速度、状态机随后改成
+> 在 BRAKING 分支里每周期调 `chassis_BrakeWheels()` 下发零速。只发一次是不够的 —— 状态机线程
+> 与控制环是独立线程，存在"控制环已进入 `chassis_DriveStep()` 下发旧速度、状态机随后改成
 > BRAKING"的交叠窗口，那帧旧速度会盖掉先发的零速。
 
 ### 两条自动保护
@@ -473,18 +467,18 @@ Data[7]     保留填 0
 
 | 要做什么 | 改哪个文件 | 具体位置 |
 | --- | --- | --- |
-| **加新的执行机构**<br>接口不限 CAN：PWM / GPIO / 串口都行 | 新建 `DEVICE/xxx.c` / `xxx.h`（照 `lift_axis.c` / `grip_seq.c` 的形状：`xxx_Init()` + `xxx_Step()` + 私有状态） | ① 新模块内实现 `xxx_Init()` / `xxx_Step()`<br>② 由 `IFACE/auxiliary.c` 的 `aux_Init()` / `aux_Step()` 聚合调用<br>③ 在 `contract_OnEnter()` 补该机构的使能 / 失能调用<br>④ 仅当受上位机 **CAN** 指令控制时，才在 `aux_HandleCmd()` 加 `case` |
-| **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `DEVICE/chassis_drive.c` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
-| **改状态迁移**<br>加新状态、改转移条件 | `CONTRACT/contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
-| **改协议**<br>新指令码、新地址 | `CONTRACT/contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
+| **加新的执行机构**<br>接口不限 CAN：PWM / GPIO / 串口都行 | 新建 `DEVICE/xxx.c` / `xxx.h`（照 `lift_axis.cpp` / `grip_seq.cpp` 的形状：`xxx_Init()` + `xxx_Step()` + 私有状态） | ① 新模块内实现 `xxx_Init()` / `xxx_Step()`<br>② 由 `IFACE/auxiliary.cpp` 的 `aux_Init()` / `aux_Step()` 聚合调用<br>③ 在 `contract_OnEnter()` 补该机构的使能 / 失能调用<br>④ 仅当受上位机 **CAN** 指令控制时，才在 `aux_HandleCmd()` 加 `case` |
+| **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `DEVICE/chassis_drive.cpp` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
+| **改状态迁移**<br>加新状态、改转移条件 | `CONTRACT/contract.cpp` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
+| **改协议**<br>新指令码、新地址 | `CONTRACT/contract.h` + `BSP/Emm_V5.cpp` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.cpp` |
 | **改默认路线**<br>动作序列、航段表 | `APP_LOG/nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文。⚠ 段类型是 `nav.h` 的 `NavSegType_t`，加新类型要同时改 `nav_SegStep()` |
-| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `APP_LOG/nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav_align.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav.c` 的 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `grip_seq.h` 的 `GRIP_*` |
-| **改场地几何**<br>区域位置、尺寸 | `APP_LOG/nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav*.c` 只做引擎 |
-| **加数据源**<br>第二个相机、新传感器串口 | `input.c` + `vision.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉见 `vision.c` 的 `vision_Step()`）。⚠ `input.c` 另有「摁键」小节，新增通道时不要混进去 |
-| **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
+| **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `APP_LOG/nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav_align.cpp` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav.cpp` 的 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `grip_seq.h` 的 `GRIP_*` |
+| **改场地几何**<br>区域位置、尺寸 | `APP_LOG/nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav*.cpp` 只做引擎 |
+| **加数据源**<br>第二个相机、新传感器串口 | `input.cpp` + `vision.cpp` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉见 `vision.cpp` 的 `vision_Step()`）。⚠ `input.cpp` 另有「摁键」小节，新增通道时不要混进去 |
+| **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.cpp` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
 | **改摁键引脚 / 延时**<br>换脚、换成板载键、改倒计时 | `input.h` | `KEY_PORT` 与 `KEY_CLK` 必须同步改，再改 `KEY_PIN`；有效电平改 `KEY_ACTIVE_LOW`；时序与接线见下文「摁键自启动」 |
-| **接避障层**<br>反应式优先级抑制 | 新建 `avoid.c`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
-| **改状态屏内容** | `oled.c` | `oled_ShowStatus()` |
+| **接避障层**<br>反应式优先级抑制 | 新建 `avoid.cpp`（建议） | 排在 `nav_Step()` 之后：后写的覆盖先写的即得优先级，无需新仲裁机制 |
+| **改状态屏内容** | `oled.cpp` | `oled_ShowStatus()` |
 | **换舵机 / 标定行程** | `servo.h` | `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US` |
 | **改夹持机构的角度 / 高度 / 斜坡** | `grip_seq.h` | `GRIP_ROT_*`（三个端点角与斜坡速率）、`GRIP_JAW_*`（开合角）、`GRIP_H_*`（抓取 / 落盘 / 安全 / 卸载 / 取回 / 码垛各高度）、`GRIP_TRAY_*`（物料盘通道 / 三槽位 / 斜坡）、`GRIP_*_TIMEOUT_MS` |
 
@@ -492,7 +486,7 @@ Data[7]     保留填 0
 
 `APP_LOG/nav_map.h` 是**智能搬运初赛赛场的地图文件**（纯数据，无逻辑），取自
 `DOC/07_智能搬运赛项命题要求.md` 与「图 1 初赛赛场示意图」；**场地几何与默认路线表都在该文件**，
-`nav*.c` 只保留引擎逻辑。
+`nav*.cpp` 只保留引擎逻辑。
 
 - **坐标系**：原点 = 场地左上角（俯视，与图 1 同向），+X 向右，+Y 向下，单位 mm。
   它与里程计坐标系（上电点为原点、随车体）**不是一个东西**；两者的换算取决于上电摆放位姿。
@@ -528,13 +522,13 @@ Data[7]     保留填 0
 
 | 项 | 取值 | 宏 |
 | --- | --- | --- |
-| 引脚 | `PA0`（当前工程未占用；`GPIOA` 时钟已由 `board.c` 开启） | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
+| 引脚 | 原 STM32 为 `PA0`；Linux 侧本机无物理键（`input_stub.cpp` 恒不按下），真机按 GPIO 重新映射 | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
 | 有效电平 | 低电平按下（内部上拉） | `KEY_ACTIVE_LOW` / `KEY_PUPD` |
 | 消抖 | 连续 4 次同电平（控制环 5 ms → 20 ms） | `KEY_DEBOUNCE_CNT` |
 | 延时 | 3000 ms | `KEY_START_DELAY_MS` |
 | 受理状态 | 仅 `CHS_IDLE` / `CHS_READY` | `input_KeyStep()` |
 
-**接线**：`PA0` 与 `GND` 之间接一个常开摁键，内部上拉已开、无需外部电阻。
+**接线**（原 STM32）：`PA0` 与 `GND` 之间接一个常开摁键，内部上拉已开、无需外部电阻。
 ⚠ 换到板载摁键且它是"按下接 VDD"的 WK_UP 型时，把 `KEY_ACTIVE_LOW` 改成 `0`
 （`KEY_PUPD` 会跟着变成下拉）；换端口则 `KEY_PORT` 与 `KEY_CLK` 必须同步改。
 
@@ -563,10 +557,10 @@ Data[7]     保留填 0
 | --- | --- | --- |
 | `nav`（编排层） | `nav_Step()` 在 `contract_ControlStep()` 的 RUNNING 闸门**之前**调用；启动由 `contract_OnEnter(CHS_RUNNING)` 里的 `nav_Start()` 触发；姿态环给定经黑板 `chassis.yawTarget` 传递 | **里程计标定**（`chassis_drive.h` 的轮径 / 轮距 / 轮序 / 符号）与**姿态环 PID 参数**——仍是占位值 |
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
-| `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
-| `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
-| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
-| **避障层**（`avoid.c`） | `avoid_Step()` 在编排序列里紧跟 `nav_Step()` 之后；读视觉2 的 `0xF3` 障碍横向偏移，只在 `RUNNING` 且本段属**平移族**（`FORWARD` / `STRAFE` / `RING` / `STACK`）时，把 `±AVOID_STRAFE_VEL` **叠加**到黑板 `chassis.vx` 上（不改 `vy`，不覆盖 nav 本段的横移目标） | ⚠ `AVOID_STRAFE_VEL` / `AVOID_HOLD_MS` / `AVOID_DEADBAND_CM` 为**占位值**；视觉侧须按 `0xF3` 定稿格式发帧（障碍存在期间持续发，MCU 靠帧超时判消失） |
+| `视觉模块 1`（颜色 + 对准帧解析，`vision.cpp`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
+| `夹持机构`（`grip_seq.cpp`，经 `auxiliary.cpp` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
+| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.cpp`，经 `nav.cpp` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
+| **避障层**（`avoid.cpp`） | `avoid_Step()` 在编排序列里紧跟 `nav_Step()` 之后；读视觉2 的 `0xF3` 障碍横向偏移，只在 `RUNNING` 且本段属**平移族**（`FORWARD` / `STRAFE` / `RING` / `STACK`）时，把 `±AVOID_STRAFE_VEL` **叠加**到黑板 `chassis.vx` 上（不改 `vy`，不覆盖 nav 本段的横移目标） | ⚠ `AVOID_STRAFE_VEL` / `AVOID_HOLD_MS` / `AVOID_DEADBAND_CM` 为**占位值**；视觉侧须按 `0xF3` 定稿格式发帧（障碍存在期间持续发，MCU 靠帧超时判消失） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
 > 控制权"的归位逻辑（停车 / 故障 / 急停后不再拿着失效的段基准接着往下跑），该逻辑只有
@@ -588,18 +582,18 @@ Data[7]     保留填 0
 
 | 模块 | 接入动作 | 前置条件 |
 | --- | --- | --- |
-| `input`（三条串口 + 摁键） | `input_Init()` 只配硬件与字节管道；`input_Step()` **已接入**（编排序列第 1 步） | 无。串口接收走 DMA + IDLE 中断，**不开新任务**。三条通道的字节均有消费方（`screen_Step()` 已接） |
+| `input`（三条串口 + 摁键） | `input_Init()` 只配硬件与字节管道；`input_Step()` **已接入**（编排序列第 1 步） | 无。串口接收走 serial 底座轮询，**不开新线程**。三条通道的字节均有消费方（`screen_Step()` 已接） |
 | `vision`（两个视觉模块） | **两个都已接入**（编排序列第 1 步）：`vision1_Step()` 解析 `0xF5`（颜色 + 对准距离）、`vision_Step()` 解析 `0xF3`（障碍横向偏移）/ `0xF4`（任务码）；`vision_Init()` 在 `ALL_Init()` 归零槽位 | 无。帧解析靠 `input_Read()` 拉字节，须在**任务上下文**调用 |
 | `avoid`（避障层） | **已接入**：`avoid_Step()` 排在编排序列 `nav_Step()` **之后**；消费 `vision_TakeFrame()` 的障碍横向偏移 | 无。⚠ 让行速度 / 失效时长 / 死区三个宏为**占位值**，待实测 |
-| `screen`（串口屏协议） | **已接入**：`screen_Step()` 收屏上报（编排序列第 1 步）；上屏（任务码 / 任务统计）走 `screen_ShowTask()` / `screen_ShowGet()` / `screen_ShowPut()` / `screen_ShowErr()`，**调用点在 STATE 任务**（`contract_UiStep()`）—— 屏指令是阻塞发送（115200 下最长约 6 ms），**不能放进 5 ms 控制环**；且**每个 200 ms 超时周期最多发一条**，把连发阻塞摊到多个周期。⚠ 控件名宏 `SCREEN_OBJ_*` 是**占位值**，按 TJC 工程实际控件名改 | 屏上报的字节经 `input_Read(INPUT_SCREEN)` 拉取，须在**任务上下文**调用 |
-| `oled` | **已接入**：`oled_Step()` 在 STATE 任务里紧跟 `contract_UiStep()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不能放进 5 ms 控制环**；放在 STATE 是为了让阻塞与屏发送**在同一任务内串行**，不与控制环叠加 |
-| `servo` | **三路都已由 `grip_seq.c` 的夹持机构接管**（CH1 旋转轴 / CH2 夹子 / CH3 车载物料盘），无需额外接入；标定行程走 `CMD_GRIP_*`（`0x33`~`0x37`）或直接调 `servo_SetPulse()` | 无。⚠ **不要绕过夹持机构直接改这三路的角度** —— 会与旋转轴 / 物料盘斜坡和装载序列打架 |
+| `screen`（串口屏协议） | **已接入**：`screen_Step()` 收屏上报（编排序列第 1 步）；上屏（任务码 / 任务统计）走 `screen_ShowTask()` / `screen_ShowGet()` / `screen_ShowPut()` / `screen_ShowErr()`，**调用点在 STATE 线程**（`contract_UiStep()`）—— 屏指令是阻塞发送（115200 下最长约 6 ms），**不能放进 5 ms 控制环**；且**每个 200 ms 超时周期最多发一条**，把连发阻塞摊到多个周期。⚠ 控件名宏 `SCREEN_OBJ_*` 是**占位值**，按 TJC 工程实际控件名改 | 屏上报的字节经 `input_Read(INPUT_SCREEN)` 拉取，须在**线程上下文**调用 |
+| `oled` | **已接入**：`oled_Step()` 在 STATE 线程里紧跟 `contract_UiStep()`（内部已按 `OLED_REFRESH_MS` 限速） | 无。注意刷新是阻塞式软件 I2C，**不能放进 5 ms 控制环**；放在 STATE 是为了让阻塞与屏发送**在同一线程内串行**，不与控制环叠加 |
+| `servo` | **三路都已由 `grip_seq.cpp` 的夹持机构接管**（CH1 旋转轴 / CH2 夹子 / CH3 车载物料盘），无需额外接入；标定行程走 `CMD_GRIP_*`（`0x33`~`0x37`）或直接调 `servo_SetPulse()` | 无。⚠ **不要绕过夹持机构直接改这三路的角度** —— 会与旋转轴 / 物料盘斜坡和装载序列打架 |
 
 > 新模块的周期处理挂进 `contract_ControlStep()` 的编排序列里；**插入位置由该模块自身的
 > 归位需求决定** —— 需要"每周期都被调用才能自保"的（如 `nav_Step()`）放在闸门之前，
 > 纯执行类、不需要自保的放在闸门之后。
 
-### 视觉模块 1（`vision.c`）：物块颜色 + 对准帧已定稿并接入
+### 视觉模块 1（`vision.cpp`）：物块颜色 + 对准帧已定稿并接入
 
 **只用一个功能码 `0xF5`，DATA 固定 5 字节**，帧壳与校验和视觉模块 2 完全相同：
 
@@ -620,7 +614,7 @@ Data[7]     保留填 0
 >
 > 消费方是编排层的**对准段**（`NAV_SEG_ALIGN`）与**装载段的挑色步**（`NAV_SEG_LOAD` 每轮先比 `color` 与任务码目标色），见下节。
 
-### 原料区动作：回零 / 对准 / 装载三个航段（`nav_seg.c` + `nav_align.c`）
+### 原料区动作：回零 / 对准 / 装载三个航段（`nav_seg.cpp` + `nav_align.cpp`）
 
 原料区那两段（默认路线 06·07·08 与 37·38·39，两批各一次）由**三个新段类型**承载，
 都是"车停原地、只动机构或只微调底盘"：
@@ -654,7 +648,7 @@ Data[7]     保留填 0
 - ⚠ **段超时字段是 `uint32_t`**：一轮装载按当前的 `LIFT_VEL_DEFAULT`（300 RPM = 10 mm/s）估算
   约 40 s，三轮"等色 + 对准 + 动作"已远超 `uint16_t` 的 65.5 s 上限（现给 240 s）。抬高升降速度后可以调小这些常量。
 
-### 目标区动作：横移 + 卸料 / 取回 / 码垛（`nav_seg.c`）
+### 目标区动作：横移 + 卸料 / 取回 / 码垛（`nav_seg.cpp`）
 
 车外目标区（粗加工区 / 暂存区）的动作分两类：**横移对准**（底盘）与**取放**（机构），
 各自占一个段类型，同名段可重复出现（**每件一个段**）：
@@ -680,7 +674,7 @@ Data[7]     保留填 0
 - ⚠ `NAV_MAP_RING_DOCK_NUM` / `NAV_MAP_RING_DIR`（`nav_map.h`）是**占位值**：
   入口停靠点正对哪个位号、位号增大朝车体哪一侧，取决于现场两区的摆位与编号方向，需实测核定。
 
-### 视觉模块 2（`vision.c`）：任务码 + 避障帧均已定稿并接入
+### 视觉模块 2（`vision.cpp`）：任务码 + 避障帧均已定稿并接入
 
 **通信帧格式 = 匿名（ANO）通信协议 V7 的精简帧 —— 去掉了目标地址 `D_ADDR`**，
 其余字段与校验算法原样保留：
@@ -743,13 +737,16 @@ Data[7]     保留填 0
 
 ### 三条串口的分工
 
+> ⚠ 下表「串口」一行的 USART/DMA/引脚是**原 STM32 硬件接线**，迁移后由 `posix/stub/input_stub.cpp`
+> 的 `serial` 底座接管（多实例 termios 串口）。通道语义（视觉1 / 视觉2 / 串口屏）不变，物理口按鲁班猫5 实际接线重新映射。
+
 | | 视觉模块 1 | 视觉模块 2 | 串口屏 |
 | --- | --- | --- | --- |
 | 通道 | `INPUT_VISION1` | `INPUT_VISION2` | `INPUT_SCREEN` |
-| 串口 | USART1（PA9/PA10，DMA2 Stream5） | USART3（PB10/PB11，DMA1 Stream3） | USART2（PA2/PA3，DMA1 Stream5） |
+| 串口（原 STM32） | USART1（PA9/PA10，DMA2 Stream5） | USART3（PB10/PB11，DMA1 Stream3） | USART2（PA2/PA3，DMA1 Stream5） |
 | 承载内容 | 物块颜色 + 对准相对距离（前后 / 左右） | 障碍物（`0xF3`）+ 任务码（二维码，`0xF4`），视距 50 cm | 控件指令下发 + 触摸 / 变量事件上报 |
-| 协议实现 | `vision.c`（**匿名协议精简帧**，与视觉 2 共用组帧 / 校验） | `vision.c`（**匿名协议精简帧**） | `screen.c`（TJC 协议） |
-| 状态 | 协议已落地**并接入控制环**（`0xF5`，DATA 5 字节）；消费方为对准段 | 协议已落地**并接入控制环**：`0xF4`（任务码）由装载段消费，`0xF3`（障碍横向偏移，DATA 2 字节）由避障层 `avoid_Step()` 消费 | 协议已落地**并接入控制环**（收：`screen_Step()`；发：STATE 任务里的 `contract_UiStep()`） |
+| 协议实现 | `vision.cpp`（**匿名协议精简帧**，与视觉 2 共用组帧 / 校验） | `vision.cpp`（**匿名协议精简帧**） | `screen.cpp`（TJC 协议） |
+| 状态 | 协议已落地**并接入控制环**（`0xF5`，DATA 5 字节）；消费方为对准段 | 协议已落地**并接入控制环**：`0xF4`（任务码）由装载段消费，`0xF3`（障碍横向偏移，DATA 2 字节）由避障层 `avoid_Step()` 消费 | 协议已落地**并接入控制环**（收：`screen_Step()`；发：STATE 线程里的 `contract_UiStep()`） |
 
 ### 新机构接入系统要做三件事
 
@@ -765,8 +762,8 @@ Data[7]     保留填 0
    `chassis_DriveWatchdog()` → `aux_Step()` → `input_Step()` → `vision1_Step()` → `vision_Step()` →
    `screen_Step()` → `chassis_CheckBraking()` → `nav_Step()` → `RUNNING ? chassis_DriveStep() : BRAKING ? chassis_BrakeWheels()`。
    新模块的周期处理挂进 `vision_Step()` 之前那一组，不要改动这个顺序。
-2. **加新机构时别碰 `contract.c` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
-   状态机永远只认"系统级"的事，机构细节全留在各自的机构层文件（`lift_axis.c` / `grip_seq.c`）。
+2. **加新机构时别碰 `contract.cpp` 的状态机逻辑。** 只需在 `contract_OnEnter()` 里加一行调用。
+   状态机永远只认"系统级"的事，机构细节全留在各自的机构层文件（`lift_axis.cpp` / `grip_seq.cpp`）。
 
 ---
 
@@ -813,10 +810,15 @@ Data[7]     保留填 0
 
 见 `DOC/`（全部为宽幅矢量 `.svg`，1600×1000，可直接缩放）：
 
-- `DOC/01_函数调用链与开发落点.svg` —— 启动链 / 三任务 / 控制环编排序列 / CAN 收帧分流 / 开发落点速查
-- `DOC/02_状态机迁移图.svg` —— 六态迁移 13 条 + 进入动作 + 自动事件与摁键来源
-- `DOC/03_代码架构全景图.svg` —— 一页看全：启动链 → 三任务 → CAN 上/下行 → L2 路由表 → 黑板 → 文件分层
-- `DOC/04_main初始化收敛到ALL_Init.svg` —— `ALL_Init()` 八步重构对比
-- `DOC/05_工程进度全景_已建与未建.svg` —— 已接入 / 已建未接入 / 未开始 三列盘点
-- `DOC/06_引脚分配对应图.svg` —— 引脚与外设分配
-- `DOC/07_智能搬运赛项命题要求.md` —— 赛项比赛流程与运行要求（`nav_map.h` 地图数据的依据，非图）
+> ⚠ **以下 6 张 SVG 仍描述 STM32 + FreeRTOS 旧架构（`.c` 文件、FreeRTOS 任务、USART/DMA/引脚），
+> 尚未随 2026-10-31 的 Linux 迁移同步更新。** 其中「状态机迁移图（02）」和「赛项命题要求（07）」
+> 与底座无关、依然准确；其余 01/03/04/05/06 涉及底座/引脚，需按新架构（std::thread / SocketCAN /
+> PCA9685 / serial）重画后才可信。引用前先核对。
+
+- `DOC/01_函数调用链与开发落点.svg` —— 启动链 / 三线程 / 控制环编排序列 / CAN 收帧分流 / 开发落点速查（⚠ 待同步）
+- `DOC/02_状态机迁移图.svg` —— 六态迁移 13 条 + 进入动作 + 自动事件与摁键来源（底座无关，仍准确）
+- `DOC/03_代码架构全景图.svg` —— 一页看全：启动链 → 三线程 → CAN 上/下行 → L2 路由表 → 黑板 → 文件分层（⚠ 待同步）
+- `DOC/04_main初始化收敛到ALL_Init.svg` —— `ALL_Init()` 重构对比（⚠ 待同步）
+- `DOC/05_工程进度全景_已建与未建.svg` —— 已接入 / 已建未接入 / 未开始 三列盘点（⚠ 待同步）
+- `DOC/06_引脚分配对应图.svg` —— 引脚与外设分配（⚠ 已随 STM32 移除失效，建议删除）
+- `DOC/07_智能搬运赛项命题要求.md` —— 赛项比赛流程与运行要求（`nav_map.h` 地图数据的依据，非图，仍准确）

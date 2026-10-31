@@ -2,11 +2,10 @@
 #define __NAV_PRIV_H
 
 #include "nav.h"
+#include <chrono>
 #include "chassis_drive.h"
 #include "auxiliary.h"
 #include "vision.h"
-#include "FreeRTOS.h"
-#include "task.h"
 
 //nav 内部共享：状态结构、内部宏与跨文件函数原型。对外接口见 nav.h
 //拆分只为缩短单文件；函数与调用关系不变，故运行负担不变

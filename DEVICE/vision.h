@@ -88,7 +88,7 @@ typedef struct {
 
 extern __IO VisionSlot_t visionSlot;	//视觉模块 2 槽位（USART3）
 
-//初始化：复位两个视觉槽位与组帧状态；⚠ 须在 input_Init() 之后调用（槽位基准取 xTaskGetTickCount）
+//初始化：复位两个视觉槽位与组帧状态；⚠ 须在 input_Init() 之后调用（槽位基准取当前毫秒时间）
 void vision_Init(void);
 
 //周期处理：收帧 + 校验 + 刷新在线标志

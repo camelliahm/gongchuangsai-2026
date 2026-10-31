@@ -1,7 +1,7 @@
 {
     "files.associations": {
-        "*.h": "c"
+        "*.h": "cpp"
     },
-    "cmake.sourceDirectory": "/home/camelliahm/桌面/Eng_Innovation_Contest/STM32F407_CAN_Position",
+    "cmake.sourceDirectory": "${workspaceFolder}/posix",
     "cmake.autoDetectSourceDirectory": false
 }

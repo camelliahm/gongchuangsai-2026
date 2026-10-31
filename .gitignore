@@ -2,11 +2,7 @@
 /*
 !/.gitignore
 !/README.md
-
-# APP 只纳入 main.c（其余 stm32f4xx_it / conf 属于 ST 模板）
-!/APP/
-/APP/*
-!/APP/main.c
+!/build.sh
 
 # 契约与调度层（契约 / 状态机 / 显示 / 通用算法）
 !/CONTRACT/
@@ -20,17 +16,13 @@
 # 接入与人机层（auxiliary / screen）
 !/IFACE/
 
-# 自研应用层与 RTOS
+# 自研应用层（Emm_V5 / can / board 头等）
 !/BSP/
-!/FreeRTOS/
 
-# GCC + CMake 构建（换机器 / 换系统开发时要用，必须入库；产物在 build-gcc/ 自动被忽略）
-!/CMakeLists.txt
-!/CMakePresets.json
-!/cmake/
-!/STM32_CAN_CMD.code-workspace
+# 驱动（fifo 等）
+!/DRIVERS/
 
-# POSIX 本机模拟（移除 STM32 的验证骨架；源码入库，build/ 构建产物忽略）
+# POSIX 本机模拟（Linux 构建；源码入库，build/ 构建产物忽略）
 !/posix/
 /posix/build/
 
@@ -41,6 +33,6 @@
 !/.vscode/settings.json
 !/.vscode/tasks.json
 !/.vscode/launch.json
+!/STM32_CAN_CMD.code-workspace
 
-# 以下内容不入版本库：CMSIS、LIB、DRIVERS（第三方库）、DOC、gongchuangsai-2026
-# 构建产物（build-gcc/）由顶部 /* 规则统一忽略
+# 以下内容不入版本库：DOC
