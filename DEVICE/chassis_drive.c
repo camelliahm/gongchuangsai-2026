@@ -1,6 +1,8 @@
 #include "chassis_drive.h"
 #include "Emm_V5.h"
 #include "PID_Mod.h"
+#include "imu_filter.h"
+#include "bmi088.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -356,9 +358,22 @@ static void chassis_UpdateOdom(void)
 	chassisDrive.odomX += dx * c - dy * s;
 	chassisDrive.odomY += dx * s + dy * c;
 
-	/* 航向走连续域：单调累加，跨 ±180 不跳变，导航到位判据与姿态环
+	/* 航向互补融合：陀螺仪提供短期角速度增量（无打滑、响应快），
+	 * 里程计提供长期绝对航向（不漂）。用同一个 gamma 把两者合成：
+	 *   yaw = (1-γ)·(yaw + ω_gyr·dt)  +  γ·yaw_odom
+	 * ⚠ 陀螺仪 yaw 符号(IMU_YAW_SIGN)须依安装朝向实测后校准，装反则融合打架。
+	 * 结果仍走连续域：单调累加，跨 ±180 不跳变，导航到位判据与姿态环
 	 * 的误差才有意义（否则 179°→-180° 会算出几百度的假误差） */
-	chassisDrive.odomYawCont += dyaw;
+	{
+		float gyr[3], gyrYawDeg, dt;
+
+		dt = (float)CHASSIS_CTRL_PERIOD_MS / 1000.0f;
+		bmi088_ReadGyrRad(gyr);
+		gyrYawDeg = IMU_YAW_SIGN * gyr[2] * (180.0f / 3.14159265f);	//rad/s → 度/s
+		chassisDrive.odomYawCont =
+			(1.0f - CHASSIS_YAW_FUSION_GAMMA) * (chassisDrive.odomYawCont + gyrYawDeg * dt)
+			+ CHASSIS_YAW_FUSION_GAMMA * (chassisDrive.odomYawCont + dyaw);
+	}
 
 	//归一化副本：内部三角函数近似与对外显示用
 	chassisDrive.odomYaw = chassisDrive.odomYawCont;

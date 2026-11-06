@@ -25,6 +25,12 @@
 #define CHASSIS_DRIVE_ACC_DEFAULT	(20u)	//速度模式加速度(0-255，0=直接启动)
 #define CHASSIS_DRIVE_VEL_MAX_RPM	(500u)	//单轮速度上限(RPM)，防止指令打爆电机
 
+/*---- IMU yaw 融合参数 ----*/
+//里程计 yaw 长期不漂但受打滑影响、响应慢；陀螺仪 yaw 短期准、响应快但会漂。
+//互补融合：IMU 提供角速度增量(短期)，里程计周期性拉回漂移(长期)。
+#define CHASSIS_YAW_FUSION_GAMMA	(0.03f)	//融合增益：越大越信里程计(越稳/越慢)，越小越信陀螺仪(越跟手/易漂)
+#define IMU_YAW_SIGN				(1.0f)	//陀螺仪 yaw 角速度符号：⚠ 依 BMI088 安装朝向实测后定(±1)
+
 /*---- 单台电机的反馈状态 ----*/
 typedef struct {
 	uint8_t	 online;			//1 = 反馈帧未超时
