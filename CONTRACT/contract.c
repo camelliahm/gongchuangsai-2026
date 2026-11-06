@@ -6,6 +6,7 @@
 #include "input.h"
 #include "vision.h"
 #include "screen.h"
+#include "imu_filter.h"
 #include "can.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -537,6 +538,7 @@ void contract_ControlStep(void)
 	vision1_Step();  //视觉模块 1 帧解析（物块颜色 + 对准相对距离）
 	vision_Step();  //视觉模块 2 帧解析（二维码任务码 / 避障列表）
 	screen_Step();  //串口屏上报帧解析（USART2；只收不阻塞，发送在 STATE 任务里）
+	imu_filter_Step();  //BMI088 姿态实时更新（读陀螺仪/加速度计 → 低通+互补滤波）
 
 	//2. 停车过程的停稳判断（可能投递 EV_ARRIVED）
 	chassis_CheckBraking();

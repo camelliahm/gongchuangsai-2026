@@ -50,6 +50,8 @@ set(DEVICE_SOURCES
     "${PROJ_ROOT}/DEVICE/servo.c"
     "${PROJ_ROOT}/DEVICE/input.c"
     "${PROJ_ROOT}/DEVICE/vision.c"
+    "${PROJ_ROOT}/DEVICE/bmi088.c"
+    "${PROJ_ROOT}/DEVICE/imu_filter.c"
 )
 
 set(APPLOG_SOURCES

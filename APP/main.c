@@ -7,6 +7,8 @@
 #include "screen.h"
 #include "oled.h"
 #include "nav.h"
+#include "bmi088.h"
+#include "imu_filter.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -88,6 +90,8 @@ static void ALL_Init(void)
 	vision_Init();                         // 视觉 1 / 2 帧槽位归零（须在 input_Init 之后）
 	screen_Init();                         // 串口屏上报槽位归零（USART2 硬件在 input_Init）
 	oled_Init();                           // OLED 状态屏（软件 I2C）
+	bmi088_Init();                         // BMI088 六轴 IMU（软 SPI，返回 false = 自检失败）
+	imu_filter_Init();                     // IMU 滤波状态复位（不依赖调度器，首次 Step 建 tick 基准）
 	nav_Init();                            // 编排层：装载默认地图，不自动启动
 	configASSERT(can_RtosInit() == true);  // CAN 接收队列与发送互斥锁
 	contract_Init();                       // 状态机事件队列
