@@ -530,9 +530,10 @@ Data[7]     保留填 0
 **调试后门 + 唯一外部急停**。把状态机推到 `RUNNING` 的正规入口就是这颗摁键 ——
 它是 `nav_Start()` 之前那道闸门在板内的唯一开关。
 
-`CFG_HOST_CAN_ENABLED` 只闸**速度段**与**机构段**（`contract_DriveCmd` / `aux_HandleCmd`），
-**系统段（`0x00~0x0F`）不受它约束** —— 那里是唯一的外部急停与故障解除通道，
-闸掉会让 `FAULT` / `ESTOP` 进去就出不来（只剩断电复位）。
+`CFG_HOST_CAN_ENABLED` 闸**速度段**、**机构段**与系统段的**使能/启动/停止**
+（`contract_DriveCmd` / `aux_HandleCmd` / `contract_SysCmd` 的 ENABLE·START·STOP），
+但系统段的 **急停 `CMD_ESTOP` / 解除故障 `CMD_CLEAR_FAULT` 常开** —— 那是唯一的
+外部安全通道，闸掉会让 `FAULT` / `ESTOP` 进去就出不来（只剩断电复位）。
 
 | 项 | 取值 | 宏 |
 | --- | --- | --- |

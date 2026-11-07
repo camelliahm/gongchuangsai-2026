@@ -164,24 +164,36 @@ static void contract_Step(ChassisEvent_t ev, uint32_t param)
  * @brief  系统段消息（0x00~0x0F）：转投状态机事件
  * @retval true-已受理 false-段内无属主（计入 evtIgnored）
  * @note   只投请求，能否迁移由状态机查表决定（闸门在 s_transTable）
- * @note   本段不受 CFG_HOST_CAN_ENABLED 约束：它是唯一的外部急停与故障解除通道，
- *         闸掉会让 FAULT / ESTOP 进去就出不来（只剩断电复位）
+ * @note   上位机指令（使能/启动/停止）受 CFG_HOST_CAN_ENABLED 闸，=0 时不参与编译；
+ *         但急停 CMD_ESTOP 与解除故障 CMD_CLEAR_FAULT 常开——它们是唯一的外部安全
+ *         通道，闸掉会让 FAULT / ESTOP 进去就出不来（只剩断电复位）
  * @author camelliahm
  */
 static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
 	(void)f;
 
+	//急停 / 解除故障：安全通道，不受上位机开关约束，常开
 	switch (cmd)
 	{
-	case CMD_ENABLE:      contract_PostEvent(EV_ENABLE, 0);      return true;
-	case CMD_DISABLE:     contract_PostEvent(EV_DISABLE, 0);     return true;
-	case CMD_START:       contract_PostEvent(EV_START, 0);       return true;
-	case CMD_STOP:        contract_PostEvent(EV_STOP, 0);        return true;
 	case CMD_ESTOP:       contract_PostEvent(EV_ESTOP, 0);       return true;
 	case CMD_CLEAR_FAULT: contract_PostEvent(EV_CLEAR_FAULT, 0); return true;
-	default:                                                    return false;
+	default:                                                    break;
 	}
+
+	//使能 / 启动 / 停止：上位机指令，无上位机时不参与编译
+#if CFG_HOST_CAN_ENABLED
+	switch (cmd)
+	{
+	case CMD_ENABLE:  contract_PostEvent(EV_ENABLE, 0);  return true;
+	case CMD_DISABLE: contract_PostEvent(EV_DISABLE, 0); return true;
+	case CMD_START:   contract_PostEvent(EV_START, 0);   return true;
+	case CMD_STOP:    contract_PostEvent(EV_STOP, 0);    return true;
+	default:                                              return false;
+	}
+#else
+	return false;		//无上位机：使能/启动/停止段无属主
+#endif
 }
 
 /**

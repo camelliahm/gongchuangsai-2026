@@ -8,10 +8,11 @@
 
 /*---- 功能开关 ----*/
 //1 = 有上位机，CAN 指令层生效；0 = 无上位机，指令层不生效（纯自治）
-//只闸速度指令（DriveCmd）与机构指令（aux_HandleCmd），反馈接收与各模块周期任务不受影响；
-//系统段（使能/启动/急停/解除故障）不闸——它是唯一的外部急停与故障解除通道
+//只闸速度指令（DriveCmd）、机构指令（aux_HandleCmd）与系统段使能/启动/停止（SysCmd），
+//反馈接收与各模块周期任务不受影响；急停 CMD_ESTOP / 解除故障 CMD_CLEAR_FAULT 常开——
+//它们是唯一的外部安全通道，闸掉会让 FAULT / ESTOP 进去就出不来（只剩断电复位）
 #ifndef CFG_HOST_CAN_ENABLED
-#define CFG_HOST_CAN_ENABLED	(0)		//是否启用上位机 CAN 指令层（速度 + 机构段）
+#define CFG_HOST_CAN_ENABLED	(0)		//是否启用上位机 CAN 指令层（速度 + 机构 + 使能/启动/停止段）
 #endif
 
 /*---- 地址分配（ZDT 帧：ExtId[28:8] = 地址，ExtId[7:0] = 包序号）----*/
