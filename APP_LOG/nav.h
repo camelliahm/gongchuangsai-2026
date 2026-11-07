@@ -105,6 +105,7 @@ typedef struct {
 	uint8_t okPut;		//成功完成的放置动作数
 	uint8_t errGet;		//判失败的抓取次数（重试用尽 / 段超时）
 	uint8_t errPut;		//判失败的放置次数
+	uint8_t skip;		//跳过的航段数（逻辑失败续走，不投 FAULT）
 } NavStats_t;
 
 void nav_Init(void);
@@ -117,6 +118,9 @@ void nav_Start(void);
 
 //中止并清速度。正常路径由 nav_Step() 在离开 RUNNING 时自动调用
 void nav_Abort(void);
+
+//把导航状态复位回 IDLE（不装订地图、不清统计），供任务收尾回 IDLE 后复用
+void nav_Reset(void);
 
 //控制环周期调用（5ms）。须置于 RUNNING 闸门之前，见 .c 内说明
 void nav_Step(void);

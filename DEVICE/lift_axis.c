@@ -289,7 +289,9 @@ void lift_HandleFeedback(const CAN_Frame_t *f)
 
 /**
  * @brief  升降轴反馈看门狗
- * @note   仅 READY / RUNNING 下判定；只在"在线 → 掉线"跳变沿投一次 EV_FAULT
+ * @note   仅 READY / RUNNING 下判定；只在"在线 → 掉线"跳变沿置离线标志。
+ *         不投 EV_FAULT：升降轴掉线不算终态，后续依赖它的取放航点由导航层
+ *         跳过续走，最大限度跑完路线
  * @author camelliahm
  */
 static void lift_Watchdog(void)
@@ -306,7 +308,6 @@ static void lift_Watchdog(void)
 		if (lift.online)
 		{
 			lift.online = 0;
-			contract_PostEvent(EV_FAULT, 0x05u);
 		}
 	}
 	else
@@ -334,7 +335,7 @@ static void lift_CheckArrive(void)
 			can_TxLock();
 			Emm_V5_Origin_Interrupt(CHASSIS_ADDR_LIFT);
 			can_TxUnlock();
-			contract_PostEvent(EV_FAULT, 0x05u);
+			//回零超时不投 EV_FAULT：交给导航层把回零段当逻辑失败跳过续走
 		}
 		return;
 	}

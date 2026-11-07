@@ -459,13 +459,17 @@ Data[7]     保留填 0
 
 | 保护 | 判据 | 事件 |
 | --- | --- | --- |
-| `chassis_DriveWatchdog()` | READY/RUNNING/BRAKING 下某电机超 100 ms 没回帧 | `EV_FAULT` |
+| `chassis_DriveWatchdog()` | READY/RUNNING/BRAKING 下某电机超 100 ms 没回帧 | `EV_FAULT`（唯一进 FAULT 终态的源） |
 | `chassis_CheckBraking()` | BRAKING 下四轮转速 < 30 RPM 且持续 200 ms | `EV_ARRIVED` |
-| `lift_Watchdog()` | READY/RUNNING 下升降轴超 200 ms 没回帧 | `EV_FAULT` |
-| `lift_CheckArrive()` | ① 回零超时 15 s → 中断回零 + 报故障<br>② 到位：位置窗口 + 转速 + 持续 200 ms → 清 `moving`（**不投事件**） | ① `EV_FAULT`<br>② 无 |
+| `lift_Watchdog()` | READY/RUNNING 下升降轴超 200 ms 没回帧 | 只置 `lift.online=0`（**不投事件**，交导航层跳过续走） |
+| `lift_CheckArrive()` | ① 回零超时 15 s → 中断回零<br>② 到位：位置窗口 + 转速 + 持续 200 ms → 清 `moving`（**不投事件**） | ① 无（回零段当逻辑失败跳过）<br>② 无 |
 
 > 看门狗用**跳变沿判据**：只在"在线 → 掉线"那一拍投递一次。若每 5 ms 都投，会刷爆
 > 8 深的事件队列并淹没真正的事件。
+>
+> **故障分层**：只有「四轮掉线」进 `FAULT` 终态（车动不了，物理上无法继续）；其余一切
+> 逻辑失败（段超时 / 越界 / 无色 / 未回零 / 升降轴掉线 / 取放序列超时）由导航层
+> `nav_SkipSeg()` 安全复位后**跳过本段续走**，最大限度跑完路线，不升级成整条中止。
 
 ---
 
@@ -526,17 +530,22 @@ Data[7]     保留填 0
 **调试后门 + 唯一外部急停**。把状态机推到 `RUNNING` 的正规入口就是这颗摁键 ——
 它是 `nav_Start()` 之前那道闸门在板内的唯一开关。
 
+`CFG_HOST_CAN_ENABLED` 只闸**速度段**与**机构段**（`contract_DriveCmd` / `aux_HandleCmd`），
+**系统段（`0x00~0x0F`）不受它约束** —— 那里是唯一的外部急停与故障解除通道，
+闸掉会让 `FAULT` / `ESTOP` 进去就出不来（只剩断电复位）。
+
 | 项 | 取值 | 宏 |
 | --- | --- | --- |
-| 引脚 | `PA0`（当前工程未占用；`GPIOA` 时钟已由 `board.c` 开启） | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
-| 有效电平 | 低电平按下（内部上拉） | `KEY_ACTIVE_LOW` / `KEY_PUPD` |
+| 引脚 | `PE2`（板载 1SW2；`GPIOE` 时钟由 `input_Init()` 的 `KEY_CLK` 开启） | `KEY_PORT` / `KEY_PIN` / `KEY_CLK` |
+| 有效电平 | 低电平按下（板载 10K 上拉 + 内部上拉） | `KEY_ACTIVE_LOW` / `KEY_PUPD` |
 | 消抖 | 连续 4 次同电平（控制环 5 ms → 20 ms） | `KEY_DEBOUNCE_CNT` |
 | 延时 | 3000 ms | `KEY_START_DELAY_MS` |
 | 受理状态 | 仅 `CHS_IDLE` / `CHS_READY` | `input_KeyStep()` |
 
-**接线**：`PA0` 与 `GND` 之间接一个常开摁键，内部上拉已开、无需外部电阻。
-⚠ 换到板载摁键且它是"按下接 VDD"的 WK_UP 型时，把 `KEY_ACTIVE_LOW` 改成 `0`
-（`KEY_PUPD` 会跟着变成下拉）；换端口则 `KEY_PORT` 与 `KEY_CLK` 必须同步改。
+**接线**：板载 `1SW2`（`PE2` — `GND`，外部 10K 上拉到 3.3V），按下为低。
+⚠ 板载 4 颗键是 `1SW2`~`1SW5` → `PE2`~`PE5`，换用别的键只改 `KEY_PIN`；
+换端口则 `KEY_PORT` 与 `KEY_CLK` 必须同步改；换成"按下接 VDD"的键时把 `KEY_ACTIVE_LOW` 改成 `0`
+（`KEY_PUPD` 会跟着变成下拉）。
 
 **时序与语义**
 
@@ -565,7 +574,7 @@ Data[7]     保留填 0
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含摁键消抖与 3 s 自启动倒计时 | 无。引脚见「摁键自启动」表 |
 | `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
 | `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
-| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即判故障） |
+| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即跳过续走） |
 | **避障层**（`avoid.c`） | `avoid_Step()` 在编排序列里紧跟 `nav_Step()` 之后；读视觉2 的 `0xF3` 障碍横向偏移，只在 `RUNNING` 且本段属**平移族**（`FORWARD` / `STRAFE` / `RING` / `STACK`）时，把 `±AVOID_STRAFE_VEL` **叠加**到黑板 `chassis.vx` 上（不改 `vy`，不覆盖 nav 本段的横移目标） | ⚠ `AVOID_STRAFE_VEL` / `AVOID_HOLD_MS` / `AVOID_DEADBAND_CM` 为**占位值**；视觉侧须按 `0xF3` 定稿格式发帧（障碍存在期间持续发，MCU 靠帧超时判消失） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还

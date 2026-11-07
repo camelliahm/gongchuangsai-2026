@@ -164,13 +164,14 @@ static void contract_Step(ChassisEvent_t ev, uint32_t param)
  * @brief  系统段消息（0x00~0x0F）：转投状态机事件
  * @retval true-已受理 false-段内无属主（计入 evtIgnored）
  * @note   只投请求，能否迁移由状态机查表决定（闸门在 s_transTable）
+ * @note   本段不受 CFG_HOST_CAN_ENABLED 约束：它是唯一的外部急停与故障解除通道，
+ *         闸掉会让 FAULT / ESTOP 进去就出不来（只剩断电复位）
  * @author camelliahm
  */
 static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 {
 	(void)f;
 
-#if CFG_HOST_CAN_ENABLED
 	switch (cmd)
 	{
 	case CMD_ENABLE:      contract_PostEvent(EV_ENABLE, 0);      return true;
@@ -181,9 +182,6 @@ static bool contract_SysCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 	case CMD_CLEAR_FAULT: contract_PostEvent(EV_CLEAR_FAULT, 0); return true;
 	default:                                                    return false;
 	}
-#else
-	return false;		//无上位机：系统段无属主
-#endif
 }
 
 /**
@@ -516,6 +514,14 @@ void contract_StateTask(void *pvParameters)
 		if (xQueueReceive(s_evtQueue, &msg, pdMS_TO_TICKS(CHASSIS_UI_PERIOD_MS)) == pdPASS)
 		{
 			contract_Step(msg.ev, msg.param);
+		}
+
+		//任务跑完自动收尾：减速停稳后停在 READY，再自动断使能回 IDLE，
+		//形成"摁键启动 → 跑完回 IDLE"的闭环，车可推动摆下一轮料
+		if ((chassis.state == CHS_READY) && (nav_GetState() == NAV_DONE))
+		{
+			nav_Reset();	//先复位导航，避免下一轮摁键在 READY 期间再次触发本收尾
+			contract_PostEvent(EV_DISABLE, 0);
 		}
 
 		contract_UiStep();

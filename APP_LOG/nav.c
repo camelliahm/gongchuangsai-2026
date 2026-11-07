@@ -10,27 +10,48 @@
 Nav_t s_nav;
 
 /**
- * @brief  本段判故障：投事件并中止导航
- * @note   收敛到 FAULT 由状态机完成，本层不自行复位；
- *         取放族的段在这里计入失败次数，其余段（对准超时 / 位号越界）不计
+ * @brief  本段逻辑失败：安全复位机构后跳过本段并续走，不投事件
+ * @note   不把"一个航点没做成"升级成整条中止，最大限度跑完路线。
+ *         步骤：清残留速度 → 中止并回安全位 → 清跨段状态 →
+ *         补跳过计数 → seg++ 续走（走到 NAV_SEG_END 则正常收尾）。
+ *         真故障（四轮掉线）由 chassis_drive.c 直接投 EV_FAULT，不经本层
  * @author camelliahm
  */
-void nav_Fault(void)
+void nav_SkipSeg(void)
 {
-	if ((s_nav.map != NULL) && (s_nav.seg < s_nav.mapNum))
+	//清本段可能残留的底盘速度
+	chassis.vx = 0;
+	chassis.vy = 0;
+	chassis.w  = 0;
+
+	//机构可能停在半路：中止序列并拉回安全位（旋转轴 90° + 夹子张开）
+	grip_Abort();
+	grip_Safe();
+
+	//本段状态不跨段继承（与 nav_SegStart() 的开头一致）
+	s_nav.retry       = 0u;
+	s_nav.alignHold   = 0u;
+	s_nav.loadAligned = 0u;
+	s_nav.loadColored = 0u;
+	s_nav.colorHold   = 0u;
+	s_nav.gripStarted = 0u;
+
+	s_nav.skip++;
+
+	s_nav.seg++;
+
+	//走到终点：正常收尾（与 nav_Step() 的正常完成路径一致）
+	if ((s_nav.seg >= s_nav.mapNum) || (s_nav.map[s_nav.seg].type == NAV_SEG_END))
 	{
-		switch (s_nav.map[s_nav.seg].type)
-		{
-		case NAV_SEG_LOAD:
-		case NAV_SEG_RELOAD:	s_nav.errGet++;	break;
-		case NAV_SEG_UNLOAD:
-		case NAV_SEG_STACKED:	s_nav.errPut++;	break;
-		default:								break;
-		}
+		chassis.vx = 0;
+		chassis.vy = 0;
+		chassis.w  = 0;
+		contract_PostEvent(EV_STOP, 0);
+		s_nav.state = NAV_DONE;
+		return;
 	}
 
-	contract_PostEvent(EV_FAULT, 0);
-	nav_Abort();
+	nav_SegStart();
 }
 
 /**
@@ -159,7 +180,7 @@ void nav_SegStart(void)
 	{
 		if ((ring < 1u) || (ring > (uint8_t)NAV_TASK_GROUP_LEN))
 		{
-			nav_Fault();		//位号取不到 / 越界：任务码不符，不猜
+			nav_SkipSeg();		//位号取不到 / 越界：任务码不符，跳过续走
 			return;
 		}
 
@@ -322,6 +343,7 @@ void nav_Init(void)
 	s_nav.okPut   = 0u;
 	s_nav.errGet  = 0u;
 	s_nav.errPut  = 0u;
+	s_nav.skip    = 0u;
 	s_nav.cntLoad = 0u;
 	s_nav.codeLen = 0u;
 	s_nav.code[0] = '\0';
@@ -386,7 +408,7 @@ void nav_Step(void)
 		return;
 	}
 
-	//单段超时（按段取）：收敛到 FAULT，不自行复位
+	//单段超时（按段取）：逻辑失败，跳过续走（不升级成 FAULT 中止）
 	tmo = s_nav.map[s_nav.seg].timeout;
 	if (tmo == 0u)
 	{
@@ -395,7 +417,7 @@ void nav_Step(void)
 
 	if ((xTaskGetTickCount() - s_nav.segTick) > pdMS_TO_TICKS(tmo))
 	{
-		nav_Fault();
+		nav_SkipSeg();
 		return;
 	}
 

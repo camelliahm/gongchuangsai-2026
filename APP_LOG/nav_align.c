@@ -216,10 +216,10 @@ uint8_t nav_StackRing(uint8_t k)
 
 /**
  * @brief  等色步：原地等本轮目标色转到取料点，同色连续 NAV_COLOR_HOLD_FRAMES 帧算停稳
- * @retval 1 = 目标色已稳定停住；0 = 仍在等（或已判故障）
+ * @retval 1 = 目标色已稳定停住；0 = 仍在等（或已跳过续走）
  * @note   转盘停位随机，不能保证首次停的就是目标色，故先等色再对准抓取；
  *         等色期间车原地泊住（转盘在换料，追没有意义），颜色不可信时同样不动作；
- *         任务码可能晚到，本步会补解析一次；超时用尽即判故障
+ *         任务码可能晚到，本步会补解析一次；超时用尽即跳过续走
  * @author camelliahm
  */
 uint8_t nav_ColorWait(void)
@@ -238,7 +238,7 @@ uint8_t nav_ColorWait(void)
 
 	if (nav_TryTimeout(NAV_COLOR_TIMEOUT_MS, 0u) == 2u)
 	{
-		nav_Fault();
+		nav_SkipSeg();
 		return 0u;
 	}
 

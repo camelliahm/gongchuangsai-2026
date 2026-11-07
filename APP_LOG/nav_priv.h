@@ -67,6 +67,7 @@ typedef struct {
 	uint8_t			okPut;			//成功完成的放置动作数
 	uint8_t			errGet;			//判失败的抓取次数
 	uint8_t			errPut;			//判失败的放置次数
+	uint8_t			skip;			//跳过的航段数（逻辑失败续走，不投 FAULT）
 	uint8_t			cntLoad;		//已计入统计的装载轮数（grip.loadCount 的影子，防重复计数）
 	char			code[VISION_TASK_CODE_MAX];	//任务码原文（上屏用，与 task[][] 同时更新）
 	uint8_t			codeLen;		//任务码有效字符数；0 = 尚未取到
@@ -77,7 +78,7 @@ extern Nav_t s_nav;		//导航内部状态
 /*---- 内部函数（跨文件共享）----------------------------------------*/
 
 //nav.c
-void    nav_Fault(void);				//本段判故障：投事件并中止导航
+void    nav_SkipSeg(void);				//本段逻辑失败：安全复位后跳过并续走，不投事件
 uint8_t nav_TryTimeout(uint32_t tryMs, uint8_t retryMax);	//单次尝试超时判定与重开
 void    nav_SegStart(void);				//开始当前航段：记录起点、推出目标航向
 uint8_t nav_SegStep(void);				//执行当前航段，完成时返回 1

@@ -51,6 +51,16 @@ NavState_t nav_GetState(void)
 }
 
 /**
+ * @brief  把导航状态复位回 IDLE（不装订地图、不清统计）
+ * @note   供任务收尾自动回 IDLE 后调用，使下一轮摁键能重新 nav_Start()
+ * @author camelliahm
+ */
+void nav_Reset(void)
+{
+	s_nav.state = NAV_IDLE;
+}
+
+/**
  * @brief  读当前航段序号
  * @author camelliahm
  */
@@ -91,6 +101,7 @@ void nav_GetStats(NavStats_t *dst)
 	dst->okPut  = s_nav.okPut;
 	dst->errGet = s_nav.errGet;
 	dst->errPut = s_nav.errPut;
+	dst->skip   = s_nav.skip;
 }
 
 /**

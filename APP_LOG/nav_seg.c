@@ -69,15 +69,15 @@ uint8_t nav_MotionStep(void)
 }
 
 /**
- * @brief  对准段：单次时限 + 超时重试，重试用尽才判故障
- * @retval 1 = 对准完成；0 = 进行中或已判故障
+ * @brief  对准段：单次时限 + 超时重试，重试用尽才跳过续走
+ * @retval 1 = 对准完成；0 = 进行中或已跳过
  * @author camelliahm
  */
 uint8_t nav_AlignStep(void)
 {
 	uint8_t t;
 
-	//重开尝试 / 判故障的那一周期也不留上一周期的残余速度
+	//重开尝试 / 跳过的那一周期也不留上一周期的残余速度
 	chassis.vx = 0;
 	chassis.vy = 0;
 
@@ -85,7 +85,7 @@ uint8_t nav_AlignStep(void)
 
 	if (t == 2u)
 	{
-		nav_Fault();
+		nav_SkipSeg();
 		return 0u;
 	}
 
@@ -100,9 +100,9 @@ uint8_t nav_AlignStep(void)
 
 /**
  * @brief  装载段：每轮先等目标色、再对准、抓取前复查颜色、再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
- * @retval 1 = 三轮装满；0 = 进行中或已判故障
+ * @retval 1 = 三轮装满；0 = 进行中或已跳过
  * @note   机构空闲时才发起下一轮，抓取失败按 NAV_LOAD_RETRY 重发（grip_LoadOnce 会清故障位）；
- *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接判故障；
+ *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接跳过续走；
  *         复查不符则退回等色步重来（本轮时限与重试都重算），长期卡住由段超时兜底
  * @author camelliahm
  */
@@ -151,7 +151,7 @@ uint8_t nav_LoadStep(void)
 		t = nav_TryTimeout(NAV_ALIGN_TRY_TIMEOUT_MS, NAV_ALIGN_RETRY);
 		if (t == 2u)
 		{
-			nav_Fault();
+			nav_SkipSeg();
 			return 0u;
 		}
 		if (t == 1u)
@@ -179,11 +179,11 @@ uint8_t nav_LoadStep(void)
 	}
 
 	//第 4 步：发起一轮抓取
-	if (grip.fault != 0u)		//上一轮失败：计数后重发，重试用尽才判故障
+	if (grip.fault != 0u)		//上一轮失败：计数后重发，重试用尽才跳过续走
 	{
 		if (s_nav.retry >= NAV_LOAD_RETRY)
 		{
-			nav_Fault();
+			nav_SkipSeg();
 			return 0u;
 		}
 		s_nav.retry++;
@@ -191,7 +191,7 @@ uint8_t nav_LoadStep(void)
 
 	if (grip_LoadOnce() == false)
 	{
-		nav_Fault();
+		nav_SkipSeg();
 		return 0u;
 	}
 
@@ -206,9 +206,9 @@ uint8_t nav_LoadStep(void)
  * @brief  取放段：车外目标区与物料盘之间搬一件，一次一个
  * @param  slot 物料盘槽位(1~GRIP_TRAY_POS_NUM)，由段值给定
  * @param  mode NAV_GRIP_UNLOAD = 平放卸料；NAV_GRIP_RELOAD = 取回；NAV_GRIP_STACK = 码垛卸料
- * @retval 1 = 本次取放已完成；0 = 进行中或已判故障
+ * @retval 1 = 本次取放已完成；0 = 进行中或已跳过
  * @note   车须已由上游平移段停在目标区前，本段只管一次取放；
- *         前置条件不满足（状态不符 / 升降轴未回零 / 槽位越界）直接判故障，不重试
+ *         前置条件不满足（状态不符 / 升降轴未回零 / 槽位越界）直接跳过续走，不重试
  * @author camelliahm
  */
 uint8_t nav_GripStep(uint8_t slot, uint8_t mode)
@@ -230,7 +230,7 @@ uint8_t nav_GripStep(uint8_t slot, uint8_t mode)
 
 		if (ok == false)
 		{
-			nav_Fault();
+			nav_SkipSeg();
 			return 0u;
 		}
 
@@ -245,7 +245,7 @@ uint8_t nav_GripStep(uint8_t slot, uint8_t mode)
 
 	if (grip.fault != 0u)		//序列内部超时
 	{
-		nav_Fault();
+		nav_SkipSeg();
 		return 0u;
 	}
 
