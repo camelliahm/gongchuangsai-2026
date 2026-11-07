@@ -349,7 +349,7 @@ static void chassis_UpdateOdom(void)
 
 	/* 把位移增量投影到世界坐标系（用当前 yaw 旋转）。
 	 * 用泰勒展开算 sin/cos，避免引入 math 库的重型 sinf/cosf；
-	 * ⚠ 泰勒展开只在 |角| 小时准确，故这里取归一化副本 odomYaw 而非常量累加的 odomYawCont。 */
+	 * 泰勒展开只在 |角| 小时准确，故这里取归一化副本 odomYaw 而非常量累加的 odomYawCont。 */
 	yawRad = chassisDrive.odomYaw * 3.14159265f / 180.0f;
 	x2     = yawRad * yawRad;
 	s      = yawRad * (1.0f - x2 / 6.0f + x2 * x2 / 120.0f);	//sin 近似

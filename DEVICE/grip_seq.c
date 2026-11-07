@@ -189,6 +189,82 @@ static void grip_Enter(GripPhase_t p)
 	}
 }
 
+/*---- 序列推进表：每相位登记"完成判据 + 下一相 + 超时时限" ----*/
+/* 判据按类型复用（升降停 / 夹子等时各复用多次），真正去重；带状态的分支在 grip_SeqStep 内特判 */
+
+/**
+ * @brief  旋转轴是否已到目标角
+ * @param  deg 目标角(°)
+ * @note   到位判据 = 当前角与目标角之差在 GRIP_ROT_TOL_DEG 内
+ * @author camelliahm
+ */
+static bool rot_Arrived(float deg)
+{
+	return (grip_Abs(grip.rotNow - deg) <= GRIP_ROT_TOL_DEG);
+}
+
+/**
+ * @brief  物料盘是否已到本轮目标槽位角
+ * @note   目标角取 grip.trayTarget（由 grip_TrayTo / grip_TrayHome 设定）
+ * @author camelliahm
+ */
+static bool tray_Arrived(void)
+{
+	return (grip_Abs(grip.trayNow - grip.trayTarget) <= GRIP_TRAY_TOL_DEG);
+}
+
+/**
+ * @brief  升降轴是否已停止
+ * @note   到位或故障都会停，两者靠超时兜底区分
+ * @author camelliahm
+ */
+static bool lift_Done(void)
+{
+	return (lift_IsMoving() == false);
+}
+
+//各相位的完成判据：返回 true = 本相位动作已完成，可进下一相
+static bool judge_RotPick(void)   { return rot_Arrived(GRIP_ROT_PICK_DEG); }
+static bool judge_LiftDone(void)  { return lift_Done(); }
+static bool judge_Settle(void)    { return grip_Timeout(GRIP_JAW_SETTLE_MS); }
+static bool judge_RotPlace(void)  { return rot_Arrived(GRIP_ROT_PLACE_DEG) && tray_Arrived(); }
+static bool judge_RotSafe(void)   { return rot_Arrived(GRIP_ROT_SAFE_DEG); }
+static bool judge_TrayHome(void)  { return (grip_Abs(grip.trayNow - GRIP_TRAY_POS1_DEG) <= GRIP_TRAY_TOL_DEG); }
+static bool judge_U_RotTray(void) { return rot_Arrived(GRIP_ROT_U_PICK_DEG) && tray_Arrived(); }
+static bool judge_U_RotDrop(void) { return rot_Arrived(GRIP_ROT_U_DROP_DEG); }
+
+//序列推进表项：完成判据 + 下一位相 + 超时时限
+typedef struct {
+	bool     (*done)(void);	//完成判据
+	uint8_t  next;			//下一位相 GripPhase_t
+	uint32_t timeout;		//超时时限(ms)
+} GripStep_t;
+
+static const GripStep_t s_steps[GRIP_PHASE_NUM] = {	//序列推进表
+	/*---- 装载序列 ----*/
+	[GRIP_ROT_PICK]    = { judge_RotPick,  GRIP_LOWER_PICK,  GRIP_ROT_TIMEOUT_MS  },
+	[GRIP_LOWER_PICK]  = { judge_LiftDone, GRIP_JAW_CLOSE,   GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_JAW_CLOSE]   = { judge_Settle,   GRIP_LIFT_UP,     GRIP_JAW_SETTLE_MS   },
+	[GRIP_LIFT_UP]     = { judge_LiftDone, GRIP_ROT_PLACE,   GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_ROT_PLACE]   = { judge_RotPlace, GRIP_LOWER_PLACE, GRIP_ROT_TIMEOUT_MS  },
+	[GRIP_LOWER_PLACE] = { judge_LiftDone, GRIP_JAW_OPEN,    GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_JAW_OPEN]    = { judge_Settle,   GRIP_LIFT_CLEAR,  GRIP_JAW_SETTLE_MS   },
+	[GRIP_LIFT_CLEAR]  = { judge_LiftDone, GRIP_ROT_SAFE,    GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_ROT_SAFE]    = { judge_RotSafe,  GRIP_TRAY_HOME,   GRIP_ROT_TIMEOUT_MS  },
+	[GRIP_TRAY_HOME]   = { judge_TrayHome, GRIP_IDLE,        GRIP_ROT_TIMEOUT_MS  },
+
+	/*---- 卸载序列 ----*/
+	[GRIP_U_ROT_TRAY]    = { judge_U_RotTray, GRIP_U_LOWER,     GRIP_ROT_TIMEOUT_MS  },
+	[GRIP_U_LOWER]       = { judge_LiftDone,  GRIP_U_JAW_CLOSE, GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_U_JAW_CLOSE]   = { judge_Settle,    GRIP_U_LIFT_UP,   GRIP_JAW_SETTLE_MS   },
+	[GRIP_U_LIFT_UP]     = { judge_LiftDone,  GRIP_U_ROT_DROP,  GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_U_ROT_DROP]    = { judge_U_RotDrop, GRIP_U_LOWER_DROP,GRIP_ROT_TIMEOUT_MS  },
+	[GRIP_U_LOWER_DROP]  = { judge_LiftDone,  GRIP_U_JAW_OPEN,  GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_U_JAW_OPEN]    = { judge_Settle,    GRIP_U_LIFT_CLEAR,GRIP_JAW_SETTLE_MS   },
+	[GRIP_U_LIFT_CLEAR]  = { judge_LiftDone,  GRIP_U_ROT_SAFE,  GRIP_MOVE_TIMEOUT_MS },
+	[GRIP_U_ROT_SAFE]    = { judge_RotSafe,   GRIP_IDLE,        GRIP_ROT_TIMEOUT_MS  },
+};
+
 /**
  * @brief  旋转轴斜坡：每个控制周期向目标角逼近一步
  * @note   无条件推进（安全姿态也靠它）；已到位就不再写舵机，避免无谓的比较值更新
@@ -282,97 +358,25 @@ static void grip_SeqStep(void)
 		return;
 	}
 
-	switch ((GripPhase_t)grip.phase)
+	GripPhase_t ph = (GripPhase_t)grip.phase;
+
+	/* 完成即结束的相位：到位后交还控制权，而非进入下一相 */
+	if ((ph == GRIP_TRAY_HOME) || (ph == GRIP_U_ROT_SAFE))
 	{
-	case GRIP_ROT_PICK:
-		if (grip_Abs(grip.rotNow - GRIP_ROT_PICK_DEG) <= GRIP_ROT_TOL_DEG)
-		{
-			grip_Enter(GRIP_LOWER_PICK);
-		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
+		if (s_steps[ph].done()) { grip_Abort(); }
+		else if (grip_Timeout(s_steps[ph].timeout)) { grip_Fail(); }
+		return;
+	}
 
-	case GRIP_LOWER_PICK:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_JAW_CLOSE);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_JAW_CLOSE:
-		if (grip_Timeout(GRIP_JAW_SETTLE_MS))
-		{
-			grip_Enter(GRIP_LIFT_UP);
-		}
-		break;
-
-	case GRIP_LIFT_UP:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_ROT_PLACE);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_ROT_PLACE:
-		//双轴到位才算完：夹持轴到落盘位，且物料盘已把本轮槽位转到落料点
-		if ((grip_Abs(grip.rotNow - GRIP_ROT_PLACE_DEG) <= GRIP_ROT_TOL_DEG) &&
-			(grip_Abs(grip.trayNow - grip.trayTarget) <= GRIP_TRAY_TOL_DEG))
-		{
-			grip_Enter(GRIP_LOWER_PLACE);
-		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_LOWER_PLACE:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_JAW_OPEN);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_JAW_OPEN:
-		if (grip_Timeout(GRIP_JAW_SETTLE_MS))
-		{
-			grip_Enter(GRIP_LIFT_CLEAR);
-		}
-		break;
-
-	case GRIP_LIFT_CLEAR:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_ROT_SAFE);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_ROT_SAFE:
-		if (grip_Abs(grip.rotNow - GRIP_ROT_SAFE_DEG) <= GRIP_ROT_TOL_DEG)
+	/* 旋转回安全位有"装完计数 / 归位"的分支，不是线性"到位→下一相"，单独处理 */
+	if (ph == GRIP_ROT_SAFE)
+	{
+		if (s_steps[ph].done())
 		{
 			if (grip.seqLoad == 0u)
 			{
 				grip_Abort();		//取回是一次性的，不计轮次
-				break;
+				return;
 			}
 
 			if (grip.loadCount < GRIP_LOAD_TOTAL)
@@ -389,121 +393,16 @@ static void grip_SeqStep(void)
 				grip_Abort();
 			}
 		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
+		else if (grip_Timeout(s_steps[ph].timeout))
 		{
 			grip_Fail();
 		}
-		break;
-
-	case GRIP_TRAY_HOME:
-		if (grip_Abs(grip.trayNow - GRIP_TRAY_POS1_DEG) <= GRIP_TRAY_TOL_DEG)
-		{
-			grip_Abort();
-		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	/*---- 卸载序列 ----*/
-	case GRIP_U_ROT_TRAY:
-		//双轴到位才算完：旋转轴到车内取料位，且物料盘已把待取槽位转到取料点
-		if ((grip_Abs(grip.rotNow - GRIP_ROT_U_PICK_DEG) <= GRIP_ROT_TOL_DEG) &&
-			(grip_Abs(grip.trayNow - grip.trayTarget) <= GRIP_TRAY_TOL_DEG))
-		{
-			grip_Enter(GRIP_U_LOWER);
-		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_U_LOWER:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_U_JAW_CLOSE);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_U_JAW_CLOSE:
-		if (grip_Timeout(GRIP_JAW_SETTLE_MS))
-		{
-			grip_Enter(GRIP_U_LIFT_UP);
-		}
-		break;
-
-	case GRIP_U_LIFT_UP:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_U_ROT_DROP);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_U_ROT_DROP:
-		if (grip_Abs(grip.rotNow - GRIP_ROT_U_DROP_DEG) <= GRIP_ROT_TOL_DEG)
-		{
-			grip_Enter(GRIP_U_LOWER_DROP);
-		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_U_LOWER_DROP:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_U_JAW_OPEN);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_U_JAW_OPEN:
-		if (grip_Timeout(GRIP_JAW_SETTLE_MS))
-		{
-			grip_Enter(GRIP_U_LIFT_CLEAR);
-		}
-		break;
-
-	case GRIP_U_LIFT_CLEAR:
-		if (lift_IsMoving() == false)
-		{
-			grip_Enter(GRIP_U_ROT_SAFE);
-		}
-		else if (grip_Timeout(GRIP_MOVE_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	case GRIP_U_ROT_SAFE:
-		if (grip_Abs(grip.rotNow - GRIP_ROT_SAFE_DEG) <= GRIP_ROT_TOL_DEG)
-		{
-			grip_Abort();	//一次卸载完成，交还控制权
-		}
-		else if (grip_Timeout(GRIP_ROT_TIMEOUT_MS))
-		{
-			grip_Fail();
-		}
-		break;
-
-	default:
-		grip_Abort();
-		break;
+		return;
 	}
+
+	/* 线性推进的相位：唯一一份 if/else */
+	if (s_steps[ph].done()) { grip_Enter((GripPhase_t)s_steps[ph].next); }
+	else if (grip_Timeout(s_steps[ph].timeout)) { grip_Fail(); }
 }
 
 /**
