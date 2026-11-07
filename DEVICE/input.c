@@ -10,8 +10,9 @@ static const IRQn_Type            s_irqn[INPUT_NUM]   = { USART1_IRQn,   USART3_
 
 #define INPUT_RING_MASK		(INPUT_RING_SIZE - 1u)	//环形缓冲下标掩码；INPUT_RING_SIZE 必须是 2 的幂
 
-//DMA 目标缓冲（4 字节对齐，DMA 直接写入）
-static uint8_t s_dmaBuf[INPUT_NUM][INPUT_RX_BUF] __attribute__((aligned(4)));	//每通道一块
+//DMA 目标缓冲（4 字节对齐，DMA 直接写入）；双缓冲 ping-pong，每通道两块
+static uint8_t s_dmaBuf[INPUT_NUM][2][INPUT_RX_BUF] __attribute__((aligned(4)));	//每通道两块
+static volatile uint8_t s_bufSel[INPUT_NUM];	//当前 DMA 写入哪一块：0/1
 
 //环形缓冲：head 在中断里写，tail 在任务里读，单生产者/单消费者
 static uint8_t  s_ring[INPUT_NUM][INPUT_RING_SIZE];	//每通道环形缓冲
@@ -35,7 +36,7 @@ static void input_OnIdle(InputCh_t ch)
 {
 	uint16_t len;
 	uint16_t i;
-	uint32_t primask;
+	uint8_t  cur = s_bufSel[ch];	//本帧落在哪一块（DMA 已冻结，安全可读）
 
 	len = (uint16_t)(INPUT_RX_BUF - DMA_GetCurrDataCounter(s_stream[ch]));
 
@@ -43,9 +44,7 @@ static void input_OnIdle(InputCh_t ch)
 	{
 		s_byte[ch] = (uint16_t)(s_byte[ch] + len);
 
-		primask = __get_PRIMASK();
-		__disable_irq();
-
+		//搬的是已冻结块：DMA 即将切走，不再写它，故无需关中断
 		for (i = 0u; i < len; i++)
 		{
 			uint16_t next = (uint16_t)((s_head[ch] + 1u) & INPUT_RING_MASK);
@@ -56,15 +55,15 @@ static void input_OnIdle(InputCh_t ch)
 				continue;
 			}
 
-			s_ring[ch][s_head[ch]] = s_dmaBuf[ch][i];
+			s_ring[ch][s_head[ch]] = s_dmaBuf[ch][cur][i];
 			s_head[ch] = next;
 		}
-
-		__set_PRIMASK(primask);
 	}
 
-	//重启 DMA 接收下一帧（Normal 模式传完即停，须手动重置计数）
+	//切到另一块，DMA 立即在空闲块上重启接收下一帧（Normal 模式传完即停，须手动重置计数）
+	s_bufSel[ch] = (uint8_t)(cur ^ 1u);
 	DMA_Cmd(s_stream[ch], DISABLE);
+	s_stream[ch]->M0AR = (uint32_t)&s_dmaBuf[ch][s_bufSel[ch]][0];
 	DMA_SetCurrDataCounter(s_stream[ch], INPUT_RX_BUF);
 	DMA_Cmd(s_stream[ch], ENABLE);
 }
@@ -271,8 +270,7 @@ void input_Init(void)
 	for (i = 0u; i < INPUT_NUM; i++)
 	{
 		//串口：8N1，收发均配（当前只用于收，留 TX 便于回包）
-		u.USART_BaudRate            = INPUT_BAUD;
-		u.USART_WordLength          = USART_WordLength_8b;
+		u.USART_BaudRate            = INPUT_BAUD;		u.USART_WordLength          = USART_WordLength_8b;
 		u.USART_StopBits            = USART_StopBits_1;
 		u.USART_Parity              = USART_Parity_No;
 		u.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
@@ -285,8 +283,7 @@ void input_Init(void)
 		d.DMA_PeripheralBaseAddr = (uint32_t)(&(s_usart[i]->DR));
 		d.DMA_Memory0BaseAddr    = (uint32_t)s_dmaBuf[i];
 		d.DMA_DIR                = DMA_DIR_PeripheralToMemory;
-		d.DMA_BufferSize         = INPUT_RX_BUF;
-		d.DMA_PeripheralInc      = DMA_PeripheralInc_Disable;
+		d.DMA_BufferSize         = INPUT_RX_BUF;		d.DMA_PeripheralInc      = DMA_PeripheralInc_Disable;
 		d.DMA_MemoryInc          = DMA_MemoryInc_Enable;
 		d.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
 		d.DMA_MemoryDataSize     = DMA_MemoryDataSize_Byte;
@@ -297,6 +294,7 @@ void input_Init(void)
 		d.DMA_MemoryBurst        = DMA_MemoryBurst_Single;
 		d.DMA_PeripheralBurst    = DMA_PeripheralBurst_Single;
 		DMA_Init(s_stream[i], &d);
+		s_bufSel[i] = 0u;	//初始 DMA 写块 0
 
 		//中断：只开 IDLE，不调 FreeRTOS API，故抢占优先级按普通外设给 5
 		n.NVIC_IRQChannel                   = s_irqn[i];

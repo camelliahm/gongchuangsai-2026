@@ -160,7 +160,8 @@ void nav_TaskOrder(void)
  */
 uint8_t nav_TargetColor(void)
 {
-	if ((s_nav.taskGot == 0u) || (grip.loadCount >= (uint8_t)NAV_TASK_GROUP_LEN))
+	if ((s_nav.taskGot == 0u) || (s_nav.loadGroup >= (uint8_t)NAV_TASK_GROUP_NUM)
+			|| (grip.loadCount >= (uint8_t)NAV_TASK_GROUP_LEN))
 	{
 		return (uint8_t)VISION1_COLOR_NONE;
 	}
@@ -196,7 +197,7 @@ uint8_t nav_StackRing(uint8_t k)
 	uint8_t color;
 	uint8_t j;
 
-	if (k >= (uint8_t)NAV_TASK_GROUP_LEN)
+	if ((s_nav.taskGot == 0u) || (k >= (uint8_t)NAV_TASK_GROUP_LEN))
 	{
 		return 0u;
 	}
