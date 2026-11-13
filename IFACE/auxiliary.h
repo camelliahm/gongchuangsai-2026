@@ -21,4 +21,7 @@ void aux_HandleLiftFeedback(const CAN_Frame_t *f);
 //辅助机构周期任务：由控制环每 5ms 调用
 void aux_Step(void);
 
+//手动调参动作分派：消费 input 的手动意图，转调升降轴/夹持机构（IDLE/READY 下受理）
+void aux_ManualStep(void);
+
 #endif

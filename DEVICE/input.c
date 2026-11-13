@@ -154,64 +154,126 @@ static void input_RefreshState(InputCh_t ch)
 	}
 }
 
-/*---- 摁键（自启动） ------------------------------------------------*/
+/*---- 摁键（自启动 + 手动调参） --------------------------------------*/
 
-/* 只在 IDLE / READY 下受理，其余状态（运行中、故障、急停）一律忽略：
-   保证摁键不会与状态机或 CAN 后门抢控制权 */
+/* 自启动键只在 IDLE / READY 下受理，其余状态（运行中、故障、急停）一律忽略：
+   保证摁键不会与状态机或 CAN 后门抢控制权。
+   手动调参键同样只在 IDLE / READY 下受理，且与自启动互斥：手动模式下自启动键不动作 */
+#define MANUAL_KEY_NUM	(3u)	//手动键数量（模式/减/加）
+
+//单颗手动键的消抖状态
+static struct {
+	uint8_t  stable;		//消抖后的稳定电平：1 = 按下
+	uint8_t  cnt;			//与 stable 相反的电平已持续的扫描次数
+	uint8_t  down;			//1 = 当前稳定按下（供边沿与长按判断）
+	uint32_t pressTick;		//按下被确认的时刻
+} s_manualKey[MANUAL_KEY_NUM];
+
+//自启动键状态
 static struct {
 	uint8_t  stable;		//消抖后的稳定电平：1 = 按下
 	uint8_t  cnt;			//与 stable 相反的电平已持续的扫描次数
 	uint8_t  wait;			//1 = 倒计时中，到点投启动事件
 	uint32_t pressTick;		//按下被确认的时刻
-} s_key;
+} s_startKey;
+
+//手动调参状态
+static struct {
+	uint8_t  active;		//1 = 手动模式中
+	uint8_t  obj;			//当前调节对象 ManualObj_t
+	uint8_t  pend;			//待消费的动作意图 ManualAct_t（NONE = 空）
+} s_manual;
 
 /**
- * @brief  读摁键电平并折算成"是否按下"
+ * @brief  读指定引脚电平并折算成"是否按下"
+ * @param  port 端口
+ * @param  pin  引脚
  * @note   返回 1 = 按下；有效电平由 KEY_ACTIVE_LOW 决定
  * @author camelliahm
  */
-static uint8_t input_KeyDown(void)
+static uint8_t input_PinDown(GPIO_TypeDef *port, uint16_t pin)
 {
-	uint8_t bit = (GPIO_ReadInputDataBit(KEY_PORT, KEY_PIN) == Bit_SET) ? 1u : 0u;
+	uint8_t bit = (GPIO_ReadInputDataBit(port, pin) == Bit_SET) ? 1u : 0u;
 
 	return (KEY_ACTIVE_LOW != 0u) ? (uint8_t)(1u - bit) : bit;
 }
 
 /**
- * @brief  摁键扫描：消抖 → 按下即起倒计时 → 到点投 EV_ENABLE + EV_START
- * @note   按下即锁存，中途松手不取消；上电以当前电平为基准，故"上电就被压住"不触发
+ * @brief  单颗键消抖扫描
+ * @param  k     键状态
+ * @param  port  端口
+ * @param  pin   引脚
+ * @note   返回 1 = 本周期确认到一次"按下边沿"；电平抖动由 cnt 累计判定
  * @author camelliahm
  */
-static void input_KeyStep(void)
+static uint8_t input_KeyScan(uint8_t *stable, uint8_t *cnt, GPIO_TypeDef *port, uint16_t pin)
 {
-	uint8_t down = input_KeyDown();
+	uint8_t down = input_PinDown(port, pin);
 
-	if (down != s_key.stable)
+	if (down != *stable)
 	{
-		s_key.cnt++;
+		(*cnt)++;
 
-		if (s_key.cnt >= KEY_DEBOUNCE_CNT)
+		if (*cnt >= KEY_DEBOUNCE_CNT)
 		{
-			s_key.stable = down;
-			s_key.cnt    = 0u;
+			*stable = down;
+			*cnt    = 0u;
+			return (down != 0u) ? 1u : 0u;		//只在"按下"边沿返回 1
+		}
+	}
+	else
+	{
+		*cnt = 0u;
+	}
 
-			if ((down != 0u) &&
+	return 0u;
+}
+
+/**
+ * @brief  自启动键扫描：消抖 → 按下即起倒计时 → 到点投 EV_ENABLE + EV_START
+ * @note   按下即锁存，中途松手不取消；上电以当前电平为基准，故"上电就被压住"不触发。
+ *         手动模式下不扫描自启动键，避免误触发跑图
+ * @author camelliahm
+ */
+static void input_StartKeyStep(void)
+{
+	uint8_t down;
+	uint8_t edge;
+
+	if (s_manual.active != 0u)
+	{
+		return;		//手动调参中，自启动键失效
+	}
+
+	down = input_PinDown(KEY_PORT, KEY_PIN);
+
+	if (down != s_startKey.stable)
+	{
+		s_startKey.cnt++;
+
+		if (s_startKey.cnt >= KEY_DEBOUNCE_CNT)
+		{
+			s_startKey.stable = down;
+			s_startKey.cnt    = 0u;
+			edge = (down != 0u) ? 1u : 0u;
+
+			if ((edge != 0u) &&
 				((chassis.state == CHS_IDLE) || (chassis.state == CHS_READY)))
 			{
-				s_key.wait      = 1u;
-				s_key.pressTick = xTaskGetTickCount();
+				s_startKey.wait      = 1u;
+				s_startKey.pressTick = xTaskGetTickCount();
 			}
 		}
 	}
 	else
 	{
-		s_key.cnt = 0u;
+		s_startKey.cnt = 0u;
 	}
 
-	if ((s_key.wait != 0u) &&
-		((xTaskGetTickCount() - s_key.pressTick) >= pdMS_TO_TICKS(KEY_START_DELAY_MS)))
+	if ((s_startKey.wait != 0u) &&
+		((xTaskGetTickCount() - s_startKey.pressTick) >= pdMS_TO_TICKS(KEY_START_DELAY_MS)))
 	{
-		s_key.wait = 0u;
+		s_startKey.wait = 0u;
 
 		//延时内状态可能已被后门改动，到点重新判定一次；IDLE 要连使能一起投
 		if (chassis.state == CHS_IDLE)
@@ -222,6 +284,96 @@ static void input_KeyStep(void)
 		else if (chassis.state == CHS_READY)
 		{
 			contract_PostEvent(EV_START, 0);
+		}
+	}
+}
+
+/**
+ * @brief  手动调参键扫描：模式键（短按切对象/长按进退）、减键、加键
+ * @note   只在 IDLE / READY 下受理；减/加动作只在手动模式下有效。
+ *         模式键按下先记边沿与时刻，松手后按持续时长判定短按/长按
+ * @author camelliahm
+ */
+static void input_ManualKeyStep(void)
+{
+	uint8_t edge;
+
+	//减键、加键：只认按下边沿
+	if (s_manual.active != 0u)
+	{
+		edge = input_KeyScan(&s_manualKey[1].stable, &s_manualKey[1].cnt, KEY_MANUAL_PORT, KEY_DEC_PIN);
+		if (edge != 0u)
+		{
+			s_manual.pend = MANUAL_ACT_DEC;
+		}
+
+		edge = input_KeyScan(&s_manualKey[2].stable, &s_manualKey[2].cnt, KEY_MANUAL_PORT, KEY_INC_PIN);
+		if (edge != 0u)
+		{
+			s_manual.pend = MANUAL_ACT_INC;
+		}
+	}
+
+	//模式键：消抖后区分短按/长按（松手即判）
+	{
+		uint8_t down = input_PinDown(KEY_MANUAL_PORT, KEY_MODE_PIN);
+
+		if (down != s_manualKey[0].stable)
+		{
+			s_manualKey[0].cnt++;
+
+			if (s_manualKey[0].cnt >= KEY_DEBOUNCE_CNT)
+			{
+				s_manualKey[0].stable = down;
+				s_manualKey[0].cnt    = 0u;
+
+				if (down != 0u)
+				{
+					s_manualKey[0].down      = 1u;
+					s_manualKey[0].pressTick = xTaskGetTickCount();
+				}
+				else
+				{
+					//松手：按按住时长判定短按/长按
+					uint32_t held = xTaskGetTickCount() - s_manualKey[0].pressTick;
+
+					s_manualKey[0].down = 0u;
+
+					if ((chassis.state != CHS_IDLE) && (chassis.state != CHS_READY))
+					{
+						return;		//非空闲/就绪态不响应模式键
+					}
+
+					if (held >= pdMS_TO_TICKS(KEY_LONG_PRESS_MS))
+					{
+						//长按：进/退手动模式
+						if (s_manual.active != 0u)
+						{
+							s_manual.active = 0u;
+							s_manual.pend   = MANUAL_ACT_EXIT;
+						}
+						else
+						{
+							s_manual.active = 1u;
+							s_manual.obj    = MANUAL_LIFT;
+							s_manual.pend   = MANUAL_ACT_ENTER;
+						}
+					}
+					else
+					{
+						//短按：手动模式下切换对象
+						if (s_manual.active != 0u)
+						{
+							s_manual.obj = (uint8_t)((s_manual.obj + 1u) % MANUAL_OBJ_NUM);
+							s_manual.pend = MANUAL_ACT_NEXT;
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			s_manualKey[0].cnt = 0u;
 		}
 	}
 }
@@ -309,10 +461,10 @@ void input_Init(void)
 		DMA_Cmd(s_stream[i], ENABLE);
 	}
 
-	//摁键：只配成 GPIO 输入，无中断、无 DMA
+	//摁键：自启动键 + 三颗手动键，只配成 GPIO 输入，无中断、无 DMA
 	RCC_AHB1PeriphClockCmd(KEY_CLK, ENABLE);
 
-	g.GPIO_Pin   = KEY_PIN;
+	g.GPIO_Pin   = KEY_PIN | KEY_MODE_PIN | KEY_DEC_PIN | KEY_INC_PIN;
 	g.GPIO_Mode  = GPIO_Mode_IN;
 	g.GPIO_OType = GPIO_OType_PP;
 	g.GPIO_PuPd  = KEY_PUPD;
@@ -320,10 +472,18 @@ void input_Init(void)
 	GPIO_Init(KEY_PORT, &g);
 
 	//以当前电平为基准：上电就被压住时不产生"按下"边沿
-	s_key.stable    = input_KeyDown();
-	s_key.cnt       = 0u;
-	s_key.wait      = 0u;
-	s_key.pressTick = 0u;
+	s_startKey.stable    = input_PinDown(KEY_PORT, KEY_PIN);
+	s_startKey.cnt       = 0u;
+	s_startKey.wait      = 0u;
+	s_startKey.pressTick = 0u;
+
+	s_manualKey[0].stable = input_PinDown(KEY_MANUAL_PORT, KEY_MODE_PIN);
+	s_manualKey[1].stable = input_PinDown(KEY_MANUAL_PORT, KEY_DEC_PIN);
+	s_manualKey[2].stable = input_PinDown(KEY_MANUAL_PORT, KEY_INC_PIN);
+
+	s_manual.active = 0u;
+	s_manual.obj    = MANUAL_LIFT;
+	s_manual.pend   = MANUAL_ACT_NONE;
 }
 
 /**
@@ -342,7 +502,8 @@ void input_Step(void)
 		input_RefreshState((InputCh_t)i);
 	}
 
-	input_KeyStep();
+	input_StartKeyStep();
+	input_ManualKeyStep();
 }
 
 /**
@@ -412,4 +573,39 @@ uint16_t input_Write(InputCh_t ch, const uint8_t *src, uint16_t len)
 const InputSlot_t *input_GetSlot(InputCh_t ch)
 {
 	return (ch < INPUT_NUM) ? &s_slot[ch] : NULL;
+}
+
+/*---- 手动调参对外接口 ---------------------------------------------*/
+
+/**
+ * @brief  当前是否处于手动调参模式
+ * @note   供 OLED 选页与辅助机构分派判断
+ * @author camelliahm
+ */
+uint8_t input_ManualActive(void)
+{
+	return s_manual.active;
+}
+
+/**
+ * @brief  当前调节对象 ManualObj_t
+ * @author camelliahm
+ */
+uint8_t input_ManualObj(void)
+{
+	return s_manual.obj;
+}
+
+/**
+ * @brief  取走一个手动动作意图
+ * @note   读取后即清空，MANUAL_ACT_NONE 表示无新意图；供辅助机构分派
+ * @author camelliahm
+ */
+uint8_t input_ManualPop(void)
+{
+	uint8_t act = s_manual.pend;
+
+	s_manual.pend = MANUAL_ACT_NONE;
+
+	return act;
 }

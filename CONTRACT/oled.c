@@ -3,6 +3,7 @@
 #include "contract.h"
 #include "chassis_drive.h"
 #include "auxiliary.h"
+#include "input.h"
 #include "FreeRTOS.h"
 #include "task.h"
 
@@ -287,6 +288,55 @@ void oled_ShowStatus(void)
 }
 
 /**
+ * @brief  组装手动调参页并刷新
+ * @note   按 input 当前调节对象选页；升降轴页显高度与步进，夹爪页显开/合，
+ *         旋转轴页显档位，物料盘页显槽位。仅供标定现场，非自动流程
+ * @author camelliahm
+ */
+void oled_ShowManual(void)
+{
+	uint8_t obj = input_ManualObj();
+
+	oled_Clear();
+
+	switch (obj)
+	{
+	case MANUAL_LIFT:
+		oled_ShowString(1u, 1u, "LIFT");
+		oled_ShowString(1u, 7u, "H:");
+		oled_ShowNum(1u, 9u, (int32_t)lift_GetHeightMM(), 4u);
+		oled_ShowString(3u, 1u, "PE4-  PE5+");
+		oled_ShowString(4u, 1u, "step 5mm");
+		break;
+
+	case MANUAL_JAW:
+		oled_ShowString(1u, 1u, "JAW");
+		//夹爪当前态：读 grip 无直接开合标志，用当前目标角与开角比较近似显示
+		oled_ShowString(2u, 1u, "PE4 open");
+		oled_ShowString(3u, 1u, "PE5 close");
+		break;
+
+	case MANUAL_ROT:
+		oled_ShowString(1u, 1u, "ROT");
+		oled_ShowString(2u, 1u, "0 pick");
+		oled_ShowString(3u, 1u, "90 safe");
+		oled_ShowString(4u, 1u, "180 place");
+		break;
+
+	case MANUAL_TRAY:
+		oled_ShowString(1u, 1u, "TRAY");
+		oled_ShowString(2u, 1u, "slot 1/2/3");
+		oled_ShowString(4u, 1u, "PE4<  PE5>");
+		break;
+
+	default:
+		break;
+	}
+
+	oled_Refresh();
+}
+
+/**
  * @brief  初始化（GPIO、上电时序、SSD1306 配置、清屏）
  * @note   上电延时用空循环，不依赖 SysTick，故调度器启动前后都能调用
  * @author camelliahm
@@ -359,6 +409,14 @@ void oled_Step(void)
 	if ((now - s_last) >= pdMS_TO_TICKS(OLED_REFRESH_MS))
 	{
 		s_last = now;
-		oled_ShowStatus();
+
+		if (input_ManualActive() != 0u)
+		{
+			oled_ShowManual();
+		}
+		else
+		{
+			oled_ShowStatus();
+		}
 	}
 }

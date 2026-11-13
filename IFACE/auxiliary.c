@@ -1,4 +1,5 @@
 #include "auxiliary.h"
+#include "input.h"
 
 /*---- 消息分发（只处理"受消息控制"的机构）----*/
 
@@ -181,6 +182,103 @@ void aux_Step(void)
 {
 	lift_Step();	//升降轴：反馈看门狗 + 到位判断
 	grip_Step();	//夹持机构：旋转 / 物料盘斜坡 + 装载 / 卸载序列
+}
+
+/**
+ * @brief  手动调参动作分派：消费 input 的手动意图，转调升降轴/夹持机构
+ * @note   只在 IDLE / READY 下受理；旋转轴三档、物料盘三槽循环，夹爪二值，
+ *         升降轴按 KEY_MANUAL_LIFT_STEP_MM 单步相对位移（不破坏回零原点）。
+ *         由 contract_ControlStep() 在 input_Step() 之后调用
+ * @author camelliahm
+ */
+void aux_ManualStep(void)
+{
+	uint8_t act;
+	uint8_t obj;
+
+	if ((chassis.state != CHS_IDLE) && (chassis.state != CHS_READY))
+	{
+		return;		//非空闲/就绪态不响应手动调参
+	}
+
+	act = input_ManualPop();
+
+	if (act == MANUAL_ACT_NONE)
+	{
+		return;
+	}
+
+	obj = input_ManualObj();
+
+	switch (act)
+	{
+	case MANUAL_ACT_DEC:
+	case MANUAL_ACT_INC:
+		break;
+
+	case MANUAL_ACT_NEXT:		//切对象：OLED 已由对象索引选页，这里无需动作
+	default:					//ENTER / EXIT / NEXT 无需机构动作
+		return;
+	}
+
+	switch (obj)
+	{
+	case MANUAL_LIFT:
+		lift_MoveByMM((act == MANUAL_ACT_INC) ? KEY_MANUAL_LIFT_STEP_MM : -KEY_MANUAL_LIFT_STEP_MM,
+					  LIFT_VEL_DEFAULT, LIFT_ACC_DEFAULT);
+		break;
+
+	case MANUAL_JAW:
+		grip_SetJaw(act == MANUAL_ACT_INC);	//加=夹紧，减=张开
+		break;
+
+	case MANUAL_ROT:
+	{
+		//三档循环：0° → 90° → 180° → 0°
+		float now = grip.rotNow;
+		float tgt;
+
+		if (act == MANUAL_ACT_INC)
+		{
+			if (now < GRIP_ROT_SAFE_DEG - GRIP_ROT_TOL_DEG)			tgt = GRIP_ROT_SAFE_DEG;
+			else if (now < GRIP_ROT_PLACE_DEG - GRIP_ROT_TOL_DEG)	tgt = GRIP_ROT_PLACE_DEG;
+			else													tgt = GRIP_ROT_PICK_DEG;
+		}
+		else
+		{
+			if (now > GRIP_ROT_SAFE_DEG + GRIP_ROT_TOL_DEG)			tgt = GRIP_ROT_SAFE_DEG;
+			else if (now > GRIP_ROT_PICK_DEG + GRIP_ROT_TOL_DEG)	tgt = GRIP_ROT_PICK_DEG;
+			else													tgt = GRIP_ROT_PLACE_DEG;
+		}
+
+		grip_RotTo(tgt);
+		break;
+	}
+
+	case MANUAL_TRAY:
+	{
+		//三槽循环：1 → 2 → 3 → 1
+		uint8_t pos = 1u;	//缺省回槽位一
+
+		if (grip.trayNow >= GRIP_TRAY_POS2_DEG - GRIP_TRAY_TOL_DEG)	pos = 2u;
+		if (grip.trayNow >= GRIP_TRAY_POS3_DEG - GRIP_TRAY_TOL_DEG)	pos = 3u;
+
+		if (act == MANUAL_ACT_INC)
+		{
+			pos = (pos % GRIP_TRAY_POS_NUM) + 1u;
+		}
+		else
+		{
+			pos = (pos == 1u) ? GRIP_TRAY_POS_NUM : (pos - 1u);
+		}
+
+		grip_TrayTo(pos);
+		break;
+	}
+
+	default:
+		break;
+	}
 }
 
 /**

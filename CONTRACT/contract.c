@@ -553,6 +553,7 @@ void contract_ControlStep(void)
 	chassis_DriveWatchdog();	//看门狗可能投递 EV_FAULT；
 	aux_Step();
 	input_Step();  //（按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志
+	aux_ManualStep();  //手动调参：消费 input 的手动意图，转调升降轴/夹持机构（IDLE/READY 下受理）
 	vision1_Step();  //视觉模块 1 帧解析（物块颜色 + 对准相对距离）
 	vision_Step();  //视觉模块 2 帧解析（二维码任务码 / 避障列表）
 	screen_Step();  //串口屏上报帧解析（USART2；只收不阻塞，发送在 STATE 任务里）

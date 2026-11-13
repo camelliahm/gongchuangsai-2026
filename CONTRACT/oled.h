@@ -5,12 +5,12 @@
 
 //OLED 显示层：SSD1306 128x64 四针 I2C，软件模拟时序（不占用硬件 I2C、无需延时），详见 README.md
 
-/*---- 软件 I2C 引脚：默认 PB6/PB7（标准 I2C1 位置，接线方便）----*/
-//⚠ 避开 PB8/PB9，那是 CAN1；也不要用 PC6/PC7/PC8，那是舵机 PWM
+/*---- 软件 I2C 引脚：PB12/PB13（空闲普通 GPIO，避开硬件外设复用）----*/
+//⚠ 原 PB6/PB7 让给 CAN2；也不要用 PC6/PC7/PC8（舵机 PWM）、PB8/PB9（CAN1）
 #define OLED_SCL_PORT		GPIOB	//SCL 所在端口
-#define OLED_SCL_PIN		GPIO_Pin_6	//SCL 引脚
+#define OLED_SCL_PIN		GPIO_Pin_12	//SCL 引脚
 #define OLED_SDA_PORT		GPIOB	//SDA 所在端口
-#define OLED_SDA_PIN		GPIO_Pin_7	//SDA 引脚
+#define OLED_SDA_PIN		GPIO_Pin_13	//SDA 引脚
 
 /*---- 面板参数 ----*/
 #define OLED_WIDTH			(128u)	//屏宽(像素)
@@ -37,6 +37,9 @@ void oled_ShowNum(uint8_t line, uint8_t col, int32_t num, uint8_t len);
 
 //组装整车状态页并刷新（读 chassis / chassisDrive / chassisMotor / lift）
 void oled_ShowStatus(void);
+
+//组装手动调参页并刷新（读 input 手动对象 + lift / grip 实时状态）
+void oled_ShowManual(void);
 
 //周期调用：限速刷新状态页。暂未接入控制环
 void oled_Step(void);
