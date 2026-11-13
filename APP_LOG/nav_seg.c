@@ -102,7 +102,7 @@ uint8_t nav_AlignStep(void)
  * @brief  装载段：每轮先等目标色、再对准、抓取前复查颜色、再抓取，装满 GRIP_LOAD_TOTAL 轮即完成
  * @retval 1 = 三轮装满；0 = 进行中或已跳过
  * @note   机构空闲时才发起下一轮，抓取失败按 NAV_LOAD_RETRY 重发（grip_LoadOnce 会清故障位）；
- *         前置条件不满足（状态不符 / 升降轴未回零）不重试，直接跳过续走；
+ *         前置条件不满足（状态不符 / 升降轴未标零）不重试，直接跳过续走；
  *         复查不符则退回等色步重来（本轮时限与重试都重算），长期卡住由段超时兜底
  * @author camelliahm
  */
@@ -208,7 +208,7 @@ uint8_t nav_LoadStep(void)
  * @param  mode NAV_GRIP_UNLOAD = 平放卸料；NAV_GRIP_RELOAD = 取回；NAV_GRIP_STACK = 码垛卸料
  * @retval 1 = 本次取放已完成；0 = 进行中或已跳过
  * @note   车须已由上游平移段停在目标区前，本段只管一次取放；
- *         前置条件不满足（状态不符 / 升降轴未回零 / 槽位越界）直接跳过续走，不重试
+ *         前置条件不满足（状态不符 / 升降轴未标零 / 槽位越界）直接跳过续走，不重试
  * @author camelliahm
  */
 uint8_t nav_GripStep(uint8_t slot, uint8_t mode)

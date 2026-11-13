@@ -4,7 +4,7 @@
 #include "stm32f4xx.h"
 #include "FreeRTOS.h"
 
-//IMU 滤波层（一阶低通 + 互补滤波），纯算法不碰硬件，输入由 bmi088 读出后喂入，详见 README.md
+//IMU 滤波层（一阶低通 + 互补滤波），纯算法不碰硬件，输入由 bmi088 读出后喂入
 
 /*---- 低通滤波系数（一阶 IIR，α 越大越灵敏、越不平滑）----*/
 #define IMU_LPF_ALPHA_GYR	(0.15f)		//陀螺仪低通系数

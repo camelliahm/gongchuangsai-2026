@@ -13,7 +13,7 @@
 #include "queue.h"
 #include "oled.h"
 
-//底盘应用层：状态机 + 系统级调度（不含控制算法），详见工程根目录 README.md
+//底盘应用层：状态机 + 系统级调度（不含控制算法）
 
 //静态存储期变量由启动代码清零；state / lastCmd 在 contract_Init() 中显式赋值
 __IO Chassis_t chassis;	//全局黑板：跨层共享的底盘状态

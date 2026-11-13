@@ -159,7 +159,7 @@ static void input_RefreshState(InputCh_t ch)
 /* 自启动键只在 IDLE / READY 下受理，其余状态（运行中、故障、急停）一律忽略：
    保证摁键不会与状态机或 CAN 后门抢控制权。
    手动调参键同样只在 IDLE / READY 下受理，且与自启动互斥：手动模式下自启动键不动作 */
-#define MANUAL_KEY_NUM	(3u)	//手动键数量（模式/减/加）
+#define MANUAL_KEY_NUM	(4u)	//手动键数量（模式/减/加 + 双键同按计时位）
 
 //单颗手动键的消抖状态
 static struct {
@@ -182,6 +182,7 @@ static struct {
 	uint8_t  active;		//1 = 手动模式中
 	uint8_t  obj;			//当前调节对象 ManualObj_t
 	uint8_t  pend;			//待消费的动作意图 ManualAct_t（NONE = 空）
+	uint8_t  zeroLatched;	//1 = 双键清零已触发，须松开两键才复位（防一直按着反复清零）
 } s_manual;
 
 /**
@@ -312,6 +313,33 @@ static void input_ManualKeyStep(void)
 		{
 			s_manual.pend = MANUAL_ACT_INC;
 		}
+
+		/* 双键同按（PE4+PE5）保持 KEY_ZERO_PRESS_MS：把升降轴当前位置重标为零。
+		 * 同按瞬间 DEC / INC 各会产生一次按下边沿，故此处撤销该意图 —— 否则机构会先动一下。
+		 * 一直按着只触发一次，松开两键才复位（zeroLatched） */
+		if ((s_manualKey[1].stable != 0u) && (s_manualKey[2].stable != 0u))
+		{
+			s_manual.pend = MANUAL_ACT_NONE;
+
+			if (s_manual.zeroLatched == 0u)
+			{
+				if (s_manualKey[3].down == 0u)
+				{
+					s_manualKey[3].down      = 1u;
+					s_manualKey[3].pressTick = xTaskGetTickCount();
+				}
+				else if ((xTaskGetTickCount() - s_manualKey[3].pressTick) >= pdMS_TO_TICKS(KEY_ZERO_PRESS_MS))
+				{
+					s_manual.zeroLatched = 1u;
+					s_manual.pend        = MANUAL_ACT_ZERO;
+				}
+			}
+		}
+		else
+		{
+			s_manualKey[3].down  = 0u;
+			s_manual.zeroLatched = 0u;
+		}
 	}
 
 	//模式键：消抖后区分短按/长按（松手即判）
@@ -354,9 +382,10 @@ static void input_ManualKeyStep(void)
 						}
 						else
 						{
-							s_manual.active = 1u;
-							s_manual.obj    = MANUAL_LIFT;
-							s_manual.pend   = MANUAL_ACT_ENTER;
+							s_manual.active      = 1u;
+							s_manual.obj         = MANUAL_LIFT;
+							s_manual.pend        = MANUAL_ACT_ENTER;
+							s_manual.zeroLatched = 0u;		//新一次进入：双键清零复位
 						}
 					}
 					else

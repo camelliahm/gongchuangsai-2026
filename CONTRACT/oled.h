@@ -3,7 +3,7 @@
 
 #include "stm32f4xx.h"
 
-//OLED 显示层：SSD1306 128x64 四针 I2C，软件模拟时序（不占用硬件 I2C、无需延时），详见 README.md
+//OLED 显示层：SSD1306 128x64 四针 I2C，软件模拟时序（不占用硬件 I2C、无需延时）
 
 /*---- 软件 I2C 引脚：PB12/PB13（空闲普通 GPIO，避开硬件外设复用）----*/
 //⚠ 原 PB6/PB7 让给 CAN2；也不要用 PC6/PC7/PC8（舵机 PWM）、PB8/PB9（CAN1）

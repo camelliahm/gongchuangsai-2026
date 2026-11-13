@@ -9,6 +9,12 @@ __IO Lift_t lift;	//升降轴状态
 //升降轴到位判据的持续计时（仅控制周期任务访问）
 static uint32_t s_liftHoldMs = 0;	//到位判据的持续计时(ms)
 
+//上电自动标零状态（延时到点把当前位置记为 0）
+static struct {
+	uint8_t  done;		//1 = 本周期的自动标零已完成
+	uint32_t tick;		//记录的上电时刻(tick)
+} s_bootZero;
+
 /*---- 升降轴（丝杆步进，CAN 地址 0x05）----*/
 
 /**
@@ -114,7 +120,7 @@ bool lift_MoveBy(int32_t delta, uint16_t vel, uint8_t acc)
  * @brief  把目标高度限制在机械行程内
  * @param  mm 期望高度(mm)
  * @retval 夹到 [0, LIFT_STROKE_MM] 之后的高度
- * @note   只在 homed = 1（已回零或 SetZero）后有意义；未回零时零点不在行程最低点
+ * @note   只在 homed = 1（已标零）后有意义；未标零时零点不在行程最低点
  * @author camelliahm
  */
 static float lift_ClampMM(float mm)
@@ -163,30 +169,12 @@ bool lift_MoveByMM(float deltaMM, uint16_t vel, uint8_t acc)
 /**
  * @brief  读当前高度（mm）
  * @retval 由 S_CPOS 反馈脉冲换算的高度
- * @note   未回零时是相对多圈计数，不是绝对行程高度
+ * @note   未标零时是相对多圈计数，不是绝对行程高度
  * @author camelliahm
  */
 float lift_GetHeightMM(void)
 {
 	return LIFT_PULSE_TO_MM(lift.pos);
-}
-
-/**
- * @brief  触发回零（模式 LIFT_HOME_MODE = 3，多圈有限位开关回零）
- * @note   异步：完成由 S_OFLAG(0x3B) 反馈，置 homed=1。
- *         限位开关必须已接好，否则会一直撞到底（有 15s 超时兜底）
- * @author camelliahm
- */
-void lift_Home(void)
-{
-	lift.homed   = 0;
-	lift.homing  = 1;
-	lift.moving  = 0;
-	s_liftHoldMs = 0;
-
-	can_TxLock();
-	Emm_V5_Origin_Trigger_Return(CHASSIS_ADDR_LIFT, LIFT_HOME_MODE, false);
-	can_TxUnlock();
 }
 
 /**
@@ -207,7 +195,7 @@ void lift_StopNow(void)
 
 /**
  * @brief  将升降轴当前位置清零
- * @note   软件标定原点（非回零）：必须在真实零位且已卸负载时调用，
+ * @note   软件标定原点：必须在真实零位且已卸负载时调用，
  *         否则整段行程的基准都是错的；调用后置 homed=1
  * @author camelliahm
  */
@@ -220,8 +208,7 @@ void lift_SetZero(void)
 	lift.pos     = 0;
 	lift.target  = 0;
 	lift.moving  = 0;
-	lift.homed   = 1;	//人工建立了坐标基准
-	lift.homing  = 0;
+	lift.homed   = 1;	//零点基准已建立
 	s_liftHoldMs = 0;
 }
 
@@ -240,8 +227,8 @@ bool lift_IsMoving(void)
 /**
  * @brief  解析升降轴反馈帧
  * @param  f 收到的帧（地址已确认为 0x05）
- * @note   与四轮共用同一套信息功能码：0x35 S_VEL 转速 / 0x36 S_CPOS 位置 /
- *         0x3B S_OFLAG 回零标志（0 = 回零完成）；数据为大端有符号
+ * @note   与四轮共用同一套信息功能码：0x35 S_VEL 转速 / 0x36 S_CPOS 位置；
+ *         数据为大端有符号
  * @author camelliahm
  */
 void lift_HandleFeedback(const CAN_Frame_t *f)
@@ -266,17 +253,6 @@ void lift_HandleFeedback(const CAN_Frame_t *f)
 								 ((uint32_t)f->Data[2] << 16) |
 								 ((uint32_t)f->Data[3] <<  8) |
 								  (uint32_t)f->Data[4]);
-		}
-		break;
-
-	case 0x3B:	//S_OFLAG 回零状态标志位：0 = 回零已完成
-		if (f->DLC >= 2)
-		{
-			if (f->Data[1] == 0)
-			{
-				lift.homed  = 1;
-				lift.homing = 0;
-			}
 		}
 		break;
 
@@ -317,28 +293,14 @@ static void lift_Watchdog(void)
 }
 
 /**
- * @brief  升降轴到位判断与回零超时保护
- * @note   ① 回零超时（限位失效会一直撞到底）→ 中断回零并报故障；
- *         ② 到位判定同时看位置与转速，只更新标志、不投递事件
+ * @brief  升降轴到位判断
+ * @note   到位判定同时看位置与转速，只更新标志、不投递事件
  * @author camelliahm
  */
 static void lift_CheckArrive(void)
 {
 	int32_t err;
 	int16_t v;
-
-	if (lift.homing)
-	{
-		if ((xTaskGetTickCount() - lift.lastTick) > pdMS_TO_TICKS(LIFT_HOME_TIMEOUT_MS))
-		{
-			lift.homing = 0;
-			can_TxLock();
-			Emm_V5_Origin_Interrupt(CHASSIS_ADDR_LIFT);
-			can_TxUnlock();
-			//回零超时不投 EV_FAULT：交给导航层把回零段当逻辑失败跳过续走
-		}
-		return;
-	}
 
 	if (!lift.moving)
 	{
@@ -374,25 +336,48 @@ static void lift_CheckArrive(void)
 }
 
 /**
- * @brief  升降轴周期任务：反馈看门狗 + 到位判断
+ * @brief  上电自动标零：延时 LIFT_BOOT_ZERO_MS 后把当前位置记为 0
+ * @note   零点由上电时丝杆所处位置确定；延时是为了等驱动器上电稳定 ——
+ *         清零命令是单向下发，发早了会被它丢掉，那样 homed 虽置 1 而实际基准并未建立
+ * @author camelliahm
+ */
+static void lift_BootZero(void)
+{
+	if (s_bootZero.done != 0u)
+	{
+		return;
+	}
+
+	if ((xTaskGetTickCount() - s_bootZero.tick) < pdMS_TO_TICKS(LIFT_BOOT_ZERO_MS))
+	{
+		return;
+	}
+
+	s_bootZero.done = 1u;
+	lift_SetZero();
+}
+
+/**
+ * @brief  升降轴周期任务：上电标零 + 反馈看门狗 + 到位判断
  * @author camelliahm
  */
 void lift_Step(void)
 {
+	lift_BootZero();
 	lift_Watchdog();
 	lift_CheckArrive();
 }
 
 /**
  * @brief  初始化升降轴
- * @note   homed 必须为 0：上电时驱动器的 pos 是它自己的多圈计数，未经回零标定
+ * @note   homed 先置 0：上电时驱动器的 pos 是它自己的多圈计数，基准尚未建立；
+ *         随后由 lift_BootZero() 延时自动标零，到点才置 homed=1
  * @author camelliahm
  */
 void lift_Init(void)
 {
 	lift.online   = 0;
 	lift.homed    = 0;
-	lift.homing   = 0;
 	lift.moving   = 0;
 	lift.pos      = 0;
 	lift.vel      = 0;
@@ -401,4 +386,7 @@ void lift_Init(void)
 	lift.lastTick = xTaskGetTickCount();
 
 	s_liftHoldMs = 0;
+
+	s_bootZero.done = 0u;
+	s_bootZero.tick = xTaskGetTickCount();
 }

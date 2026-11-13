@@ -4,7 +4,6 @@
 #include "contract.h"
 
 //升降轴层（T8 梯形丝杆 + Emm_V5 步进闭环驱动器，CAN 地址 0x05）
-//分层结构与扩展指引见工程根目录 README.md
 
 //控制环周期：须与 chassis_drive.h 的 CHASSIS_CTRL_PERIOD_MS 一致（到位计时按此累加）
 #define LIFT_CTRL_PERIOD_MS		(5u)	//升降轴控制环周期(ms)
@@ -39,12 +38,10 @@
 #define LIFT_VEL_DEFAULT		(300u)	//默认速度(RPM) = 10 mm/s
 #define LIFT_ACC_DEFAULT		(10u)	//默认加速度(0=直接启动)
 
-//回零模式：3 = 多圈有限位开关回零（丝杆轴最常用，靠限位开关定零）
-#define LIFT_HOME_MODE			(3u)	//回零模式：3 = 多圈有限位开关回零
+#define LIFT_BOOT_ZERO_MS		(1500u)	//上电自动标零延时(ms)：等驱动器上电稳定后再发清零，发早了命令会被丢弃
 
 #define LIFT_FB_TIMEOUT_MS		(200u)	//反馈超时：上报周期 50ms，200ms 未收到判掉线
 #define LIFT_FB_PERIOD_MS		(50u)	//定时上报周期：比四轮慢，丝杆响应本就慢，省带宽
-#define LIFT_HOME_TIMEOUT_MS	(15000u)//回零总超时：限位开关失效时防止电机一直撞到底
 
 //到位判据：位置窗口(按 mm 给，再换算成脉冲) + 转速阈值，两者同时满足并持续一段时间
 #define LIFT_ARRIVE_LEN_MM		(0.05f)	//到位位移窗口(mm)  ⚠ 占位值，待实测
@@ -55,8 +52,7 @@
 //升降轴状态
 typedef struct {
 	uint8_t	 online;			//1 = 反馈帧未超时
-	uint8_t	 homed;				//1 = 已完成回零（本次上电）或已人工标定原点
-	uint8_t	 homing;			//1 = 回零进行中（收到 0x3B 且值为 0 时清除）
+	uint8_t	 homed;				//1 = 零点已建立（上电自动标零或人工标零）
 	uint8_t	 moving;			//1 = 已下发位置指令且尚未判到位
 	int32_t	 pos;				//S_CPOS 实时位置(脉冲)，有符号
 	int16_t	 vel;				//S_VEL 实时转速(RPM)
@@ -84,13 +80,10 @@ void lift_ClearOnline(void);			//清在线标志，进入 IDLE 时调用
 bool lift_MoveTo(int32_t clk, uint8_t dir, uint16_t vel, uint8_t acc);	//绝对位置(脉冲)
 bool lift_MoveBy(int32_t delta, uint16_t vel, uint8_t acc);				//相对位移(脉冲)
 
-//以 mm 为单位的同一组接口：内部换算后转调上面的脉冲接口，零点 = 回零/标定原点
+//以 mm 为单位的同一组接口：内部换算后转调上面的脉冲接口，零点 = 标零位置
 bool lift_MoveToMM(float mm, uint16_t vel, uint8_t acc);		//升到绝对高度(mm)，正 = 向上
 bool lift_MoveByMM(float deltaMM, uint16_t vel, uint8_t acc);	//相对升降(mm)，正升负降
 float lift_GetHeightMM(void);									//当前高度(mm)
-
-//触发回零（模式 LIFT_HOME_MODE）
-void lift_Home(void);
 
 //立即停止升降轴
 void lift_StopNow(void);

@@ -424,7 +424,7 @@ bool grip_LoadOnce(void)
 	}
 	if (lift.homed == 0u)
 	{
-		return false;		//未回零：高度基准不可信，拒绝动作
+		return false;		//未标零：高度基准不可信，拒绝动作
 	}
 
 	grip.fault    = 0u;
@@ -457,7 +457,7 @@ static bool grip_UnloadStart(uint8_t slot, float dropH)
 	}
 	if (lift.homed == 0u)
 	{
-		return false;		//未回零：高度基准不可信，拒绝动作
+		return false;		//未标零：高度基准不可信，拒绝动作
 	}
 	if ((slot < 1u) || (slot > (uint8_t)GRIP_TRAY_POS_NUM))
 	{
@@ -515,7 +515,7 @@ bool grip_ReloadOnce(uint8_t slot)
 	}
 	if (lift.homed == 0u)
 	{
-		return false;		//未回零：高度基准不可信，拒绝动作
+		return false;		//未标零：高度基准不可信，拒绝动作
 	}
 	if ((slot < 1u) || (slot > (uint8_t)GRIP_TRAY_POS_NUM))
 	{

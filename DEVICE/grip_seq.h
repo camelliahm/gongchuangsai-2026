@@ -4,7 +4,6 @@
 #include "lift_axis.h"
 
 //夹持机构层（旋转轴 = TIM3 CH1，夹子 = TIM3 CH2，车载物料盘 = TIM3 CH3）
-//分层结构与扩展指引见工程根目录 README.md
 
 /*---- 夹持机构（旋转轴 = TIM3 CH1，夹子 = TIM3 CH2）----*/
 /* 无水平伸缩机构：水平定位靠底盘全向移动（编排层）+ 旋转轴在取料位 / 落盘位之间二选一；
@@ -129,11 +128,11 @@ void grip_Step(void);
 void grip_Safe(void);
 
 /* 启动一轮装载（取料 → 转 180° 并同步把物料盘转到本轮槽位 → 落到物料盘 → 回安全位）；
- * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零） */
+ * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未标零） */
 bool grip_LoadOnce(void);
 
 /* 启动一次卸载（从物料盘第 slot 槽取料 → 转到车外位 → 放到台面 → 回安全位）；
- * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */
+ * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未标零 / slot 越界） */
 bool grip_UnloadOnce(uint8_t slot);
 
 /* 启动一次码垛卸载：动作与 grip_UnloadOnce() 相同，只是放置高度抬一个料高，叠到已有物料上；
@@ -141,7 +140,7 @@ bool grip_UnloadOnce(uint8_t slot);
 bool grip_StackOnce(uint8_t slot);
 
 /* 启动一次取回（车外目标区取料 → 转 180° 装回物料盘第 slot 槽 → 回安全位）；
- * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未回零 / slot 越界） */
+ * 返回 false = 前置条件不满足（状态不符 / 序列忙 / 升降轴未标零 / slot 越界） */
 bool grip_ReloadOnce(uint8_t slot);
 
 //中止动作序列（保持已下发的姿态，不改变旋转轴与夹子）

@@ -305,8 +305,19 @@ void oled_ShowManual(void)
 		oled_ShowString(1u, 1u, "LIFT");
 		oled_ShowString(1u, 7u, "H:");
 		oled_ShowNum(1u, 9u, (int32_t)lift_GetHeightMM(), 4u);
-		oled_ShowString(3u, 1u, "PE4-  PE5+");
-		oled_ShowString(4u, 1u, "step 5mm");
+
+		//第 2 行：零点状态 —— 未标零时高度基准不可信
+		if (lift.homed != 0u)
+		{
+			oled_ShowString(2u, 1u, "ZERO OK");
+		}
+		else
+		{
+			oled_ShowString(2u, 1u, "NO ZERO");
+		}
+
+		oled_ShowString(3u, 1u, "PE4- PE5+ 5mm");
+		oled_ShowString(4u, 1u, "PE4+PE5=ZERO");
 		break;
 
 	case MANUAL_JAW:
@@ -397,8 +408,7 @@ void oled_Init(void)
 }
 
 /**
- * @brief  周期调用：按 OLED_REFRESH_MS 限速刷新状态页
- * @note   暂未接入控制环；接入方式见 README.md
+ * @brief  周期调用：按 OLED_REFRESH_MS 限速刷新，手动模式刷手动页、其余刷状态页
  * @author camelliahm
  */
 void oled_Step(void)

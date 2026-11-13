@@ -4,7 +4,7 @@
 #include "board.h"
 #include "can.h"
 
-//公共契约层：地址宏 / 消息码 / 状态与事件枚举 / Chassis_t / 任务参数 / 对外接口，详见 README.md
+//公共契约层：地址宏 / 消息码 / 状态与事件枚举 / Chassis_t / 任务参数 / 对外接口
 
 /*---- 功能开关 ----*/
 //1 = 有上位机，CAN 指令层生效；0 = 无上位机，指令层不生效（纯自治）
@@ -16,7 +16,7 @@
 #endif
 
 /*---- 地址分配（ZDT 帧：ExtId[28:8] = 地址，ExtId[7:0] = 包序号）----*/
-//0x01~0x04 四轮 / 0x05 升降轴 / 0xFE 本机；0x00 是 ZDT 广播地址，禁止占用。全表见 README.md
+//0x01~0x04 四轮 / 0x05 升降轴 / 0xFE 本机；0x00 是 ZDT 广播地址，禁止占用
 #define CHASSIS_ADDR_HOST			(0xFEu)		//本机（上位机）地址
 #define CHASSIS_ADDR_MOTOR_BASE		(0x01u)	//四轮驱动器起始地址（0x01~0x04）
 #define CHASSIS_MOTOR_NUM			(4u)	//底盘车轮数量
@@ -32,7 +32,7 @@
 #define CHASSIS_SEG_VISION		(0x50u)		//0x50~0x5F：视觉（规划中）
 #define CHASSIS_SEG_MASK		(0xF0u)		//段掩码：段基址 = 码 & MASK
 
-/*---- 消息码：Data[0] = 消息码，Data[1..] = 参数；各段属主见 contract.c 的 s_routeTable[] ----*/
+/*---- 消息码：Data[0] = 消息码，Data[1..] = 参数；各段属主登记在 s_routeTable[] ----*/
 typedef enum {
 	CMD_NONE		= 0x00,		//无消息码（占位）
 	CMD_ENABLE		= 0x01,		//参数无：IDLE  → READY
@@ -54,7 +54,6 @@ typedef enum {
 	//  位移量是"相对当前位置"，不是绝对位置
 	CMD_LIFT_POS	= 0x20,		//参数 8 字节
 	CMD_LIFT_MM		= 0x25,		//参数：同 0x20，位移量单位换成 0.1 mm（120 = 12.0 mm），量程更大
-	CMD_LIFT_HOME	= 0x21,		//参数无：触发回零（模式 3 = 多圈有限位开关回零）
 	CMD_LIFT_STOP	= 0x22,		//参数无：立即停止升降轴（不影响底盘）
 	CMD_LIFT_SETZERO= 0x23,		//参数无：将当前位置清零（需先卸掉丝杆负载）
 	CMD_LIFT_CLEARF	= 0x24,		//参数无：解除升降轴堵转保护
@@ -101,7 +100,7 @@ typedef enum {
 } ChassisEvent_t;
 
 /*---- 底盘整体状态（系统级）----*/
-//各模块自己的状态：chassisMotor[] / chassisDrive[] 见 chassis_drive.h，lift 见 auxiliary.h
+//各模块自己的状态：chassisMotor[] / chassisDrive[] / lift
 typedef struct {
 	ChassisState_t state;		//当前状态
 	ChassisCmd_t   lastCmd;		//最后一条收到的消息码（诊断用）
@@ -114,7 +113,7 @@ typedef struct {
 	uint32_t	   stateTick;	//进入当前状态的 tick
 } Chassis_t;
 
-/*---- 任务参数（实际创建在 APP/main.c 的任务表里，优先级依据见 README.md）----*/
+/*---- 任务参数（任务表在 APP/main.c）----*/
 #define CHASSIS_CTRL_TASK_PRIO		( tskIDLE_PRIORITY + 4 )	//控制环任务优先级（最高，5 ms 硬节拍）
 #define CHASSIS_CTRL_TASK_STACK		( 512 )		//需做浮点运算，栈留大一些
 

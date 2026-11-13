@@ -274,7 +274,6 @@ vTaskStartScheduler() ② 启动调度器（不返回）
 | `0x06` | `CMD_CLEAR_FAULT` | 无 | FAULT → READY；ESTOP → IDLE |
 | `0x10` | `CMD_SET_VEL` | `vx, vy, w` 各 int16 大端（6 字节，DLC ≥ 7） | 仅 RUNNING 下生效 |
 | `0x20` | `CMD_LIFT_POS` | 见下 | 升降轴相对位移（**脉冲**单位，单帧上限 ≈ 41 mm） |
-| `0x21` | `CMD_LIFT_HOME` | 无 | 触发回零（模式 3，限位开关） |
 | `0x22` | `CMD_LIFT_STOP` | 无 | 立即停止升降轴 |
 | `0x23` | `CMD_LIFT_SETZERO` | 无 | 当前位置清零（需先卸负载） |
 | `0x24` | `CMD_LIFT_CLEARF` | 无 | 解除升降轴堵转保护 |
@@ -321,11 +320,11 @@ Data[7]     保留填 0
 | 字段 / 宏 | 含义 |
 | --- | --- |
 | `lift.online` | 反馈未超时（`LIFT_FB_TIMEOUT_MS = 200 ms`） |
-| `lift.homed` / `lift.homing` | 本次上电已完成回零或软件标定原点 / 回零进行中（收到 `S_OFLAG`(`0x3B`) 且值为 0 时清除并置 `homed`） |
+| `lift.homed` | 零点基准已建立（上电自动标零或人工 `lift_SetZero()`） |
 | `lift.moving` | 已下发位置指令且尚未判到位 |
 | `lift.pos` / `lift.target` | 实时位置 / 目标位置（`int32_t`，脉冲，**有符号**） |
 | `LIFT_FB_PERIOD_MS = 50` | 位置上报周期（比四轮慢，丝杆响应本就慢，省带宽） |
-| `LIFT_HOME_TIMEOUT_MS = 15000` | 回零总超时，防止限位开关失效时一直撞到底 |
+| `LIFT_BOOT_ZERO_MS = 1500` | **上电自动标零延时**：等驱动器上电稳定后把当前位置记为 0，即零点 |
 | `LIFT_SCREW_LEAD_MM = 2.0f`（**已实测确认**）/ `LIFT_SCREW_MICROSTEP = 16`（**占位**）/ `LIFT_SCREW_STEP_PER_REV = 200` | T8 丝杆规格：导程 **2 mm/圈**、驱动器细分、整步数/圈 |
 | `LIFT_PULSE_PER_MM` | = `200 × 细分 / 导程` = `200 × 16 / 2` = **1600 脉冲/mm** |
 | `LIFT_MM_TO_PULSE(mm)` / `LIFT_PULSE_TO_MM(clk)` | mm ↔ 脉冲 换算宏（四舍五入到整脉冲） |
@@ -335,7 +334,9 @@ Data[7]     保留填 0
 | `LIFT_ARRIVE_VEL_TH = 30` / `LIFT_ARRIVE_HOLD_MS = 200` | 到位判据：转速阈值(RPM) + 持续时长 |
 
 - 速度想按 mm/s 给，用 `LIFT_MMPS_TO_RPM(10)` 换算（导程 2 mm 时 10 mm/s = 300 RPM）。
-- **夹行程只在 `homed = 1`（回零或 `lift_SetZero()` 之后）才有意义**——未回零时零点不在行程最低点。
+- **夹行程只在 `homed = 1` 之后才有意义**——未标零时零点不在行程最低点。
+  `homed` 由 `lift_BootZero()` 在上电 1.5 s 后自动置 1（`lift_Init()` 里先置 0，
+  到点发 `Emm_V5_Reset_CurPos_To_Zero` 清零）。现场发现零点不对时，手动模式下 **PE4+PE5 同按 2 s** 重标。
 - 对外接口（均在 `lift_axis.h` 声明，内部统一用 `can_TxLock/Unlock` 包住发送）：
   `lift_SetEnable()`、`lift_EnableFeedback()`、`lift_ClearOnline()`、`lift_MoveTo()`、`lift_MoveBy()`、
   `lift_MoveToMM()`、`lift_MoveByMM()`、`lift_GetHeightMM()`、`lift_Home()`、`lift_StopNow()`、
@@ -392,7 +393,7 @@ Data[7]     保留填 0
 
 | 对外接口 | 说明 |
 | --- | --- |
-| `grip_LoadOnce()` | 启动一轮装载；状态不符 / 序列忙 / **升降轴未回零**都返回 false |
+| `grip_LoadOnce()` | 启动一轮装载；状态不符 / 序列忙 / **升降轴未标零**都返回 false |
 | `grip_UnloadOnce(slot)` | 启动一次卸载（物料盘第 slot 槽 → 车外）；前置条件同上，另加 slot 越界检查 |
 | `grip_ReloadOnce(slot)` | 启动一次取回（车外 → 物料盘第 slot 槽）；前置条件同 `grip_UnloadOnce()` |
 | `grip_Safe()` | 安全姿态：旋转 90° + 夹子张开 + 中止序列（`contract_OnEnter()` 调用） |
@@ -462,13 +463,13 @@ Data[7]     保留填 0
 | `chassis_DriveWatchdog()` | READY/RUNNING/BRAKING 下某电机超 100 ms 没回帧 | `EV_FAULT`（唯一进 FAULT 终态的源） |
 | `chassis_CheckBraking()` | BRAKING 下四轮转速 < 30 RPM 且持续 200 ms | `EV_ARRIVED` |
 | `lift_Watchdog()` | READY/RUNNING 下升降轴超 200 ms 没回帧 | 只置 `lift.online=0`（**不投事件**，交导航层跳过续走） |
-| `lift_CheckArrive()` | ① 回零超时 15 s → 中断回零<br>② 到位：位置窗口 + 转速 + 持续 200 ms → 清 `moving`（**不投事件**） | ① 无（回零段当逻辑失败跳过）<br>② 无 |
+| `lift_CheckArrive()` | 到位：位置窗口 + 转速 + 持续 200 ms → 清 `moving` | 无（**不投事件**） |
 
 > 看门狗用**跳变沿判据**：只在"在线 → 掉线"那一拍投递一次。若每 5 ms 都投，会刷爆
 > 8 深的事件队列并淹没真正的事件。
 >
 > **故障分层**：只有「四轮掉线」进 `FAULT` 终态（车动不了，物理上无法继续）；其余一切
-> 逻辑失败（段超时 / 越界 / 无色 / 未回零 / 升降轴掉线 / 取放序列超时）由导航层
+> 逻辑失败（段超时 / 越界 / 无色 / 未标零 / 升降轴掉线 / 取放序列超时）由导航层
 > `nav_SkipSeg()` 安全复位后**跳过本段续走**，最大限度跑完路线，不升级成整条中止。
 
 ---
@@ -519,7 +520,7 @@ Data[7]     保留填 0
 
 > 转向段显式给 `timeout = NAV_TURN_TIMEOUT_MS`：姿态环一阶时间常数约 5 s，**180° 约需 24 s**，
 > 超过默认的 20 s 单段超时。平移/停留段用默认 `NAV_SEG_TIMEOUT_MS`，保持较紧的卡死检测。
-> 回零 / 对准 / 装载 / 取放 / 横移段同样**必须显式给**（`NAV_HOME_TIMEOUT_MS` /
+> 零点确认 / 对准 / 装载 / 取放 / 横移段同样**必须显式给**（`NAV_HOME_TIMEOUT_MS` /
 > `NAV_ALIGN_TIMEOUT_MS` / `NAV_LOAD_TIMEOUT_MS` / `NAV_UNLOAD_TIMEOUT_MS` /
 > `NAV_RELOAD_TIMEOUT_MS` / `NAV_RING_TIMEOUT_MS`）—— 它们比默认的 20 s 长，段超时只作兜底。
 > 段数 68 已接近 `NAV_SEG_MAX`(96) 的上限，删改路线时留意 `nav_Load()` 的长度校验。
@@ -590,7 +591,9 @@ Data[7]     保留填 0
 
 - **仅 `IDLE` / `READY` 受理**，运行 / 故障 / 急停下按键忽略，不与自动流程抢控制。
 - 长按阈值 `KEY_LONG_PRESS_MS` = 800 ms；短按 = 切对象，长按 = 进退手动。
-- 升降轴走 `lift_MoveByMM`（相对位移），**不破坏回零原点**；`lift_SetZero` 不进按键。
+- 升降轴走 `lift_MoveByMM`（相对位移），不动零点。**重标零点 = PE4 + PE5 同按 2 s**（`KEY_ZERO_PRESS_MS`）：
+  仅手动模式 + `IDLE`/`READY` 生效，须松开两键才能再次触发；同按瞬间产生的「减 / 加」边沿会被撤销，机构不会先动一下。
+- 升降轴页 OLED 第 2 行显示零点状态：`ZERO OK`（`homed`）/ `NO ZERO`——未标零时夹持机构会拒绝执行序列。
 - OLED 手动模式下切到对应对象页（升降轴/夹爪/旋转轴/物料盘），退出后回状态页。
 
 ### 已接入控制环的模块
@@ -601,7 +604,7 @@ Data[7]     保留填 0
 | `input`（摁键部分） | `input_Step()` 在编排序列第 1 步调用，内含 4 键消抖（自启动 + 手动调参）、3 s 自启动倒计时与手动模式状态机；手动动作经 `aux_ManualStep()` 分派到升降轴 / 夹持机构 | 无。引脚与对象映射见「摁键自启动」「手动调参」两表 |
 | `视觉模块 1`（颜色 + 对准帧解析，`vision.c`） | `vision1_Step()` 同样挂在编排序列第 1 步；`0xF5` 帧经共用组帧 / 校验后落进 `vision1Slot` | 无。消费方是**对准段**（`nav_AlignStep()`）与**装载段的挑色步**（`nav_ColorWait()`），但 `NAV_ALIGN_KP` / 窗口 / 限速 / `NAV_COLOR_HOLD_FRAMES` 全是**占位值** |
 | `夹持机构`（`grip_seq.c`，经 `auxiliary.c` 聚合） | `aux_Step()` 在编排序列第 1 步调用 `grip_Step()`，其中含 `rot_Step()` / `tray_Step()`（旋转轴与物料盘两条斜坡，无条件推进）与 `grip_SeqStep()`（装载 / 卸载 / 取回动作序列）；安全姿态由 `contract_OnEnter()` 的 IDLE / FAULT / ESTOP 登记为 `grip_Safe()`（**不含物料盘**） | ⚠ 触发方是**装载段**（`nav_LoadStep()`，三轮 + 失败重试）；抓取 / 落盘 / 安全三个高度、夹子开合角、两条斜坡速率、三个槽位角全为**占位值** |
-| **对准 / 装载 / 回零 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 依赖限位开关已接线；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即跳过续走） |
+| **零点确认 / 对准 / 装载 / 取放 / 横移段**（`nav_seg.c`，经 `nav.c` 分派） | 七段类型 `NAV_SEG_ALIGN` / `NAV_SEG_LOAD` / `NAV_SEG_HOME` / `NAV_SEG_UNLOAD` / `NAV_SEG_RELOAD` / `NAV_SEG_RING` / `NAV_SEG_STACK`（外加码垛用的 `NAV_SEG_STACKED`），在 `nav_SegStep()` 里各自管住超时与重试（取放三段共用 `nav_GripStep()`，横移两段共用平移判据） | ⚠ `NAV_SEG_HOME` 只等 `lift.homed`，上电自动标零后本段秒过；`NAV_SEG_LOAD` 的挑色判据与横移段的位号都依赖视觉模块 2 的任务码（取不到即跳过续走） |
 | **避障层**（`avoid.c`） | `avoid_Step()` 在编排序列里紧跟 `nav_Step()` 之后；读视觉2 的 `0xF3` 障碍横向偏移，只在 `RUNNING` 且本段属**平移族**（`FORWARD` / `STRAFE` / `RING` / `STACK`）时，把 `±AVOID_STRAFE_VEL` **叠加**到黑板 `chassis.vx` 上（不改 `vy`，不覆盖 nav 本段的横移目标） | ⚠ `AVOID_STRAFE_VEL` / `AVOID_HOLD_MS` / `AVOID_DEADBAND_CM` 为**占位值**；视觉侧须按 `0xF3` 定稿格式发帧（障碍存在期间持续发，MCU 靠帧超时判消失） |
 
 > **`nav_Step()` 必须放在 RUNNING 闸门之前，而不是之后。** 它自带"离开 RUNNING 即中止并交还
@@ -656,24 +659,24 @@ Data[7]     保留填 0
 >
 > 消费方是编排层的**对准段**（`NAV_SEG_ALIGN`）与**装载段的挑色步**（`NAV_SEG_LOAD` 每轮先比 `color` 与任务码目标色），见下节。
 
-### 原料区动作：回零 / 对准 / 装载三个航段（`nav_seg.c` + `nav_align.c`）
+### 原料区动作：零点确认 / 对准 / 装载三个航段（`nav_seg.c` + `nav_align.c`）
 
 原料区那两段（默认路线 06·07·08 与 37·38·39，两批各一次）由**三个新段类型**承载，
 都是"车停原地、只动机构或只微调底盘"：
 
 | 段类型 | 做什么 | 判完成 | 段超时 |
 | --- | --- | --- | --- |
-| `NAV_SEG_HOME` | 进入本段时若 `lift.homed = 0` 就 `lift_Home()`，之后等反馈 | `lift.homed != 0` | `NAV_HOME_TIMEOUT_MS` |
+| `NAV_SEG_HOME` | 车停原地不动，只等零点建立 | `lift.homed != 0` | `NAV_HOME_TIMEOUT_MS` |
 | `NAV_SEG_ALIGN` | 读 `vision1_GetSlot()`，`vy = Kp·front`、`vx = −Kp·left`，两轴同时进窗口后停住保持 | 两轴 \|误差\| ≤ `NAV_ALIGN_TOL_MM` 且持续 `NAV_ALIGN_HOLD_MS` | `NAV_ALIGN_TIMEOUT_MS` |
 | `NAV_SEG_LOAD` | 段入口按段值定的**颜色组**（第 1 组 / 第 3 组）取任务码并清装载计数；每轮**先等本轮目标色**（`nav_ColorWait()`：原地泊住，同色连续 `NAV_COLOR_HOLD_FRAMES` 帧算停稳）→ 再对准 → **抓取前复查颜色**（`nav_ColorMatched()`，不符退回等色步重来）→ 再 `grip_LoadOnce()` —— 落盘时物料盘同步转到本轮槽位；机构忙就等 | `grip_AllLoaded()` **且机构空闲**（等物料盘归位的收尾动作） | `NAV_LOAD_TIMEOUT_MS` |
 
 - **重试框架**：`nav_TryTimeout()` 管单次尝试的时限与重试计数。`ALIGN` 用
   `NAV_ALIGN_TRY_TIMEOUT_MS` × `NAV_ALIGN_RETRY`；`LOAD` 里对准与抓取**共用** `s_nav.retry`。
-  重试用尽才 `contract_PostEvent(EV_FAULT)` + `nav_Abort()`，收敛到 FAULT，本层不自行复位。
+  重试用尽由 `nav_SkipSeg()` 清速度、复位机构后**跳过本段续走**。
 - **fail-safe**：`vision1Slot.online = 0` 时对准段**不动作**（速度清零，等恢复或超时），
   与避障同一条铁律 —— 距离不可信就不许据它动底盘。
 - ⚠ `NAV_SEG_LOAD` 的前置条件是 `lift.homed = 1`，故默认路线把 `NAV_SEG_HOME` 排在它前面；
-  `grip_LoadOnce()` 返回 false（状态不符 / 未回零）**不重试，直接判故障**。
+  `grip_LoadOnce()` 返回 false（状态不符 / 未标零）**不重试，直接跳过续走**。
 - **装载计数每段清零**（`grip_ResetLoad()`）：不清则跑完一批再启动导航时 `grip_AllLoaded()` 恒真，
   本段会**秒过**。清零在段入口做，不在 `aux_Init()` —— 后者一次上电只执行一次。
 - **物料盘与夹持轴并行**：进入落盘旋转阶段时两轴同时起斜坡（各自按 `GRIP_*_SLEW_DEG`），
@@ -682,7 +685,7 @@ Data[7]     保留填 0
   故每轮**先等目标色**（`task[loadGroup][loadCount]`，`loadGroup` = 本段段值定的颜色组）转到取料点、
   连续若干帧同色确认停稳，再对准抓取。
   等色期间车原地泊住（`vx/vy = 0`），颜色不可信（`online = 0` 或 `color = 0`）时同样不动作。
-  **槽位仍由轮次决定**（`loadCount + 1`），**不是**按颜色查表。无任务码（`taskGot = 0`）时本段判故障。
+  **槽位仍由轮次决定**（`loadCount + 1`），**不是**按颜色查表。无任务码（`taskGot = 0`）时跳过本段续走。
 - **抓取前复查颜色**（`nav_ColorMatched()`）：等色判据是"对准之前"的快照，而对准本身要耗时，
   期间转盘可能又转过一颗 —— 那时对准收敛到的已不是目标色物料。故在 `grip_LoadOnce()` 之前
   按当前帧再比一次颜色，不符就复位 `loadColored` / `loadAligned` / `retry` 与 `tryTick`，退回等色步重来。
@@ -706,13 +709,13 @@ Data[7]     保留填 0
 - 横移段与平移段共用到位判据，只是位移由**位号差**折算：
   `(目标位号 − 当前位号) × NAV_MAP_RING_PITCH_MM × NAV_MAP_RING_DIR`。
   **当前位号在"取放族"段之间保持**（区域内逐件横移不必每次回到入口基准），
-  一旦遇到非取放族段（平移 / 转向 / 停留 / 对准 / 装载 / 回零）就复位到 `NAV_MAP_RING_DOCK_NUM`。
+  一旦遇到非取放族段（平移 / 转向 / 停留 / 对准 / 装载 / 零点确认）就复位到 `NAV_MAP_RING_DOCK_NUM`。
 - 三个取放段共用一个实现 `nav_GripStep(slot, mode)`，只靠模式参数区分
   （`NAV_GRIP_UNLOAD` / `NAV_GRIP_RELOAD` / `NAV_GRIP_STACK`）。
-- 前置条件是**车已由上游平移段停在目标区前**；不满足（状态不符 / 升降轴未回零 / 槽位越界）
-  **不重试，直接判故障**，与 `NAV_SEG_LOAD` 同一条口径。
-- ⚠ **位号越界即判故障**：任务码的位置组不做范围校验（现场圆环数未定），取值落在 1~3 之外、
-  或第二批某色在第一批里找不到同色物料，横移段入口就 `nav_Fault()`，不猜。
+- 前置条件是**车已由上游平移段停在目标区前**；不满足（状态不符 / 升降轴未标零 / 槽位越界）
+  **不重试，直接跳过续走**，与 `NAV_SEG_LOAD` 同一条口径。
+- ⚠ **位号越界即跳过续走**：任务码的位置组不做范围校验（现场圆环数未定），取值落在 1~3 之外、
+  或第二批某色在第一批里找不到同色物料，横移段入口就 `nav_SkipSeg()`，不猜。
 - ⚠ `NAV_MAP_RING_DOCK_NUM` / `NAV_MAP_RING_DIR`（`nav_map.h`）是**占位值**：
   入口停靠点正对哪个位号、位号增大朝车体哪一侧，取决于现场两区的摆位与编号方向，需实测核定。
 
@@ -815,8 +818,8 @@ Data[7]     保留填 0
 - **`lift.pos` / `lift.target` 用 `int32_t`**：驱动器位置是有符号的，无符号跨零点比较会出错。
 - **升降轴不进 `chassis_CheckBraking()` 的停稳判据**：丝杆动作与底盘停车无关，算进来会让
   底盘永远到不了 READY。
-- **`homed` 不参与移动放行**：未接限位开关的轴也能用 `CMD_LIFT_SETZERO` 手动建立基准；
-  若强行要求先回零，未接限位开关的轴将完全无法使用。
+- **`homed` 不参与移动放行**：高度基准靠上电自动标零建立，现场可用 `CMD_LIFT_SETZERO`
+  或按键重标；放行只看状态机状态，不看 `homed`。
 
 ---
 

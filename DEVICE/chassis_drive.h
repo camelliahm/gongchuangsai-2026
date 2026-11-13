@@ -3,7 +3,7 @@
 
 #include "contract.h"
 
-//底盘驱动层（四轮麦轮）：驱动器动作 / 反馈看门狗 / 停稳判断 / 底盘运动学，详见 README.md
+//底盘驱动层（四轮麦轮）：驱动器动作 / 反馈看门狗 / 停稳判断 / 底盘运动学
 
 /*---- 控制环参数 ----*/
 #define CHASSIS_CTRL_PERIOD_MS		(5u)	//控制环周期（须与 lift_axis.h 的 LIFT_CTRL_PERIOD_MS 一致）

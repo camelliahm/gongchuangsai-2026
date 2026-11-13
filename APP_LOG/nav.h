@@ -3,7 +3,7 @@
 
 #include "contract.h"
 
-//编排层（任务层）：航段序列 → 逐周期底盘速度与目标航向；nav_Step() 须在 RUNNING 闸门之前调用。详见 README.md
+//编排层（任务层）：航段序列 → 逐周期底盘速度与目标航向；nav_Step() 须在 RUNNING 闸门之前调用
 
 /*---- 航段类型 ----*/
 typedef enum {
@@ -12,7 +12,7 @@ typedef enum {
 	NAV_SEG_FORWARD,	//直行：value = 相对位移(mm)，正 = 前进
 	NAV_SEG_STRAFE,		//横移：value = 相对位移(mm)，正 = 右移
 	NAV_SEG_DWELL,		//停留：value = 时长(ms)
-	NAV_SEG_HOME,		//升降轴回零：车停原地等 lift.homed，value 忽略
+	NAV_SEG_HOME,		//零点确认：车停原地等 lift.homed，value 忽略
 	NAV_SEG_ALIGN,		//视觉对准：读视觉1 相对距离微调底盘，value 忽略
 	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value = 颜色组号
 	NAV_SEG_UNLOAD,		//单次卸载：从物料盘第 value 槽取料并放到车外目标区，value = 槽位(1~3)
@@ -28,7 +28,7 @@ typedef struct {
 	uint8_t  type;		//NavSegType_t
 	int16_t  value;		//位移(mm) / 转角(0.1 度) / 时长(ms) / 槽位 / 组号×10+件序号 / 件序号
 	int16_t  speed;		//平移速度(mm/s)，恒正；转向与停留段忽略
-	uint32_t timeout;	//本段超时(ms)；0 = 用 NAV_SEG_TIMEOUT_MS。转向/对准/装载/取放/回零段应显式给（默认值会提前打断）
+	uint32_t timeout;	//本段超时(ms)；0 = 用 NAV_SEG_TIMEOUT_MS。转向/对准/装载/取放/零点确认段应显式给（默认值会提前打断）
 } NavSeg_t;
 
 /*---- 导航状态 ----*/
@@ -68,8 +68,8 @@ typedef enum {
 #define NAV_COLOR_HOLD_FRAMES	(3u)		//同色需连续通过的帧数，确认转盘已停稳  ⚠ 占位值
 #define NAV_COLOR_TIMEOUT_MS	(25000u)	//单轮等色的上限(ms)：无任务码 / 目标色迟迟不出现即判故障
 
-/*---- 回零段（NAV_SEG_HOME）----*/
-#define NAV_HOME_TIMEOUT_MS		(20000u)	//回零段的段超时(ms)：aux 侧的 15s 通常先投 EV_FAULT
+/*---- 零点确认段（NAV_SEG_HOME）----*/
+#define NAV_HOME_TIMEOUT_MS		(20000u)	//零点确认段的段超时(ms)：到点仍未建立零点则按逻辑失败跳过续走
 
 /*---- 卸载段（NAV_SEG_UNLOAD）----*/
 #define NAV_UNLOAD_TIMEOUT_MS	(60000u)	//卸载段的段超时(ms)：须覆盖一次完整取放  ⚠ 占位值

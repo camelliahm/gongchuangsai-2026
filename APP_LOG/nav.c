@@ -2,8 +2,7 @@
 #include "nav_map.h"
 #include <math.h>
 
-//编排层（任务层）：航段调度与对外入口。详见 README.md
-//段类型实现见 nav_seg.c / 对准挑色见 nav_align.c / 工具与读接口见 nav_util.c
+//编排层（任务层）：航段调度与对外入口
 
 /*---- 内部状态（跨文件共享，声明在 nav_priv.h）----------------------------------------*/
 
@@ -137,12 +136,6 @@ void nav_SegStart(void)
 		s_nav.ringAt = (uint8_t)NAV_MAP_RING_DOCK_NUM;
 	}
 
-	//装载的前置条件是升降轴已回零，故进入回零段时触发一次（完成由 aux 侧置 homed）
-	if ((seg->type == NAV_SEG_HOME) && (lift.homed == 0u))
-	{
-		lift_Home();
-	}
-
 	//装载段入口：按段值定的颜色组取任务码，并清装载计数
 	//（不清则 grip_AllLoaded() 恒真 —— 跑完一批再启动导航，本段会秒过）
 	if (seg->type == NAV_SEG_LOAD)
@@ -200,7 +193,7 @@ void nav_SegStart(void)
 
 /**
  * @brief  执行当前航段，本段完成时返回 1
- * @note   转向 / 停留 / 回零段在此就地判定，其余段分派给 nav_seg.c；
+ * @note   转向 / 停留 / 零点确认段在此就地判定，其余段分派给 nav_seg.c；
  *         转向段只判到位，转角速度由姿态环 PID 产生；平移与横移段共用到位判据
  * @author camelliahm
  */
@@ -237,7 +230,7 @@ uint8_t nav_SegStep(void)
 	case NAV_SEG_HOME:
 		chassis.vx = 0;
 		chassis.vy = 0;
-		return (lift.homed != 0u) ? 1u : 0u;	//回零在进入本段时已触发，这里只等结果
+		return (lift.homed != 0u) ? 1u : 0u;	//零点已建立即本段完成，等待标零不影响后续判据
 
 	case NAV_SEG_ALIGN:
 		return nav_AlignStep();

@@ -3,7 +3,7 @@
 
 #include "contract.h"
 
-/* 串口屏（USART2，淘晶驰 TJC 系列 / Nextion 兼容协议）；分层与扩展指引见工程根目录 README.md
+/* 串口屏（USART2，淘晶驰 TJC 系列 / Nextion 兼容协议）
  * ⚠ USART2 的时钟 / GPIO / DMA / NVIC 与接收缓冲在 input.c，本模块只做协议组帧、解析与发送 */
 
 /* 帧格式：MCU → 屏 = ASCII 指令正文 + 结束符；屏 → MCU = 起始码 + 数据 + 结束符。

@@ -3,12 +3,11 @@
 
 #include "contract.h"
 
-/* 输入汇聚层：三条串口的硬件配置、DMA 与字节管道 + 摁键（板内自举）；
- * 视觉帧解析见 vision.c，串口屏协议见 screen.c。分层与扩展指引见工程根目录 README.md */
+/* 输入汇聚层：三条串口的硬件配置、DMA 与字节管道 + 摁键（板内自举） */
 
 /* USART1：PA9(TX)/PA10(RX)，APB2，DMA2 Stream5 Ch4 —— 视觉模块 1（物块颜色 + 对准相对距离）
  * USART3：PB10(TX)/PB11(RX)，APB1，DMA1 Stream3 Ch4 —— 视觉模块 2（障碍物 + 任务号）
- * USART2：PA2(TX)/PA3(RX)，APB1，DMA1 Stream5 Ch4 —— 串口屏（TJC 协议见 screen.h）
+ * USART2：PA2(TX)/PA3(RX)，APB1，DMA1 Stream5 Ch4 —— 串口屏（TJC 协议）
  * ⚠ 不用 USART6：它的 PC6/PC7 与舵机 PWM 是同一对引脚 */
 typedef enum {
 	INPUT_VISION1 = 0,	//USART1 → 视觉模块 1
@@ -23,7 +22,7 @@ typedef enum {
 #define INPUT_TIMEOUT_MS	(500u)		//超过此时长未收到字节判离线
 
 /* 每通道接收状态（字节级）。本层只搬字节与刷新计数，
- * 帧解析在各自的协议模块里（视觉见 vision.c，串口屏见 screen.c） */
+ * 帧解析在各自的协议模块里 */
 typedef struct {
 	uint8_t	 online;			//1 = 最后收到字节未超时
 	uint32_t lastTick;			//最后收到字节的 tick
@@ -47,7 +46,7 @@ uint16_t input_Write(InputCh_t ch, const uint8_t *src, uint16_t len);
 const InputSlot_t *input_GetSlot(InputCh_t ch);
 
 /*---- 摁键（自启动 + 手动调参）--------------------------------------*/
-//引脚、接线与状态约束见 README.md「摁键自启动（板内自举）」与「手动调参」；换引脚只改下面 KEY_PORT / KEY_CLK / KEY_PIN 三行
+//换引脚只改下面 KEY_PORT / KEY_CLK / KEY_PIN 三行
 #define KEY_PORT			GPIOE					//摁键所在端口，改端口须同步 KEY_CLK
 #define KEY_CLK				RCC_AHB1Periph_GPIOE	//KEY_PORT 对应的 AHB1 时钟
 #define KEY_PIN				GPIO_Pin_2				//自启动摁键引脚（PE2 = 板载 1SW2，外部 10K 上拉，按下接 GND）
@@ -63,6 +62,7 @@ const InputSlot_t *input_GetSlot(InputCh_t ch);
 #define KEY_DEC_PIN			GPIO_Pin_4				//减键（PE4）
 #define KEY_INC_PIN			GPIO_Pin_5				//加键（PE5）
 #define KEY_LONG_PRESS_MS	(800u)					//长按判定时长(ms)，用于进退手动模式
+#define KEY_ZERO_PRESS_MS	(2000u)					//双键同按判零时长(ms)：PE4+PE5 同时按住达此时长才重标升降轴零点
 #define KEY_MANUAL_LIFT_STEP_MM	(5.0f)				//手动升降轴单步量(mm)，正=升/负=降
 
 /*---- 手动调参：调节对象 ----*/
@@ -81,7 +81,8 @@ typedef enum {
 	MANUAL_ACT_EXIT,		//退出手动模式
 	MANUAL_ACT_NEXT,		//切换下一个调节对象
 	MANUAL_ACT_DEC,			//当前对象「减」
-	MANUAL_ACT_INC			//当前对象「加」
+	MANUAL_ACT_INC,			//当前对象「加」
+	MANUAL_ACT_ZERO			//双键同按：把升降轴当前位置重标为零
 } ManualAct_t;
 
 //当前是否处于手动调参模式

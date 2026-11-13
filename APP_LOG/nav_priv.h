@@ -8,7 +8,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-//nav 内部共享：状态结构、内部宏与跨文件函数原型。对外接口见 nav.h
+//nav 内部共享：状态结构、内部宏与跨文件函数原型
 //拆分只为缩短单文件；函数与调用关系不变，故运行负担不变
 
 /*---- 内部宏 ----------------------------------------*/
@@ -58,7 +58,7 @@ typedef struct {
 	//装载段
 	uint8_t			loadGroup;		//本轮装载读哪一组颜色：NAV_TASK_G_ORDER1 / ORDER2
 
-	//任务码（视觉2 上报的 12 位数字，4 组 × 3 位；组序见 nav.h 的 NAV_TASK_G_*）
+	//任务码（视觉2 上报的 12 位数字，4 组 × 3 位，组序由 NAV_TASK_G_* 定义）
 	uint8_t			task[NAV_TASK_GROUP_NUM][NAV_TASK_GROUP_LEN];	//各组数字：颜色组为编号 1~6 / 位置组为环号
 	uint8_t			taskGot;					//1 = 4 组已全部解析通过
 

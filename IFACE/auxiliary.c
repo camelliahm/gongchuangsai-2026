@@ -79,17 +79,6 @@ bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 		}
 		break;
 
-	case CMD_LIFT_HOME:
-		if ((chassis.state == CHS_READY) || (chassis.state == CHS_RUNNING))
-		{
-			lift_Home();
-		}
-		else
-		{
-			chassis.evtIgnored++;
-		}
-		break;
-
 	case CMD_LIFT_STOP:
 		//停止属于安全动作，任何已使能状态都接受
 		lift_StopNow();
@@ -166,7 +155,7 @@ bool aux_HandleCmd(ChassisCmd_t cmd, const CAN_Frame_t *f)
 /**
  * @brief  解析升降轴反馈帧（地址 0x05）
  * @param  f 收到的帧
- * @note   反馈解析属升降轴，实现见 lift_axis.c，此处只转发以保持本文件为唯一接入点
+ * @note   反馈解析属升降轴，此处只转发
  * @author camelliahm
  */
 void aux_HandleLiftFeedback(const CAN_Frame_t *f)
@@ -187,7 +176,7 @@ void aux_Step(void)
 /**
  * @brief  手动调参动作分派：消费 input 的手动意图，转调升降轴/夹持机构
  * @note   只在 IDLE / READY 下受理；旋转轴三档、物料盘三槽循环，夹爪二值，
- *         升降轴按 KEY_MANUAL_LIFT_STEP_MM 单步相对位移（不破坏回零原点）。
+ *         升降轴按 KEY_MANUAL_LIFT_STEP_MM 单步相对位移（不破坏零点基准）。
  *         由 contract_ControlStep() 在 input_Step() 之后调用
  * @author camelliahm
  */
@@ -215,6 +204,11 @@ void aux_ManualStep(void)
 	case MANUAL_ACT_DEC:
 	case MANUAL_ACT_INC:
 		break;
+
+	case MANUAL_ACT_ZERO:
+		//双键同按：把升降轴当前位置重标为零，与当前调节对象无关（专属于升降轴）
+		lift_SetZero();
+		return;
 
 	case MANUAL_ACT_NEXT:		//切对象：OLED 已由对象索引选页，这里无需动作
 	default:					//ENTER / EXIT / NEXT 无需机构动作

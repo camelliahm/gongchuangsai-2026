@@ -5,7 +5,7 @@
 
 /* 场地地图（智能搬运初赛赛场）：几何常量 + 默认路线表，纯数据无逻辑
    坐标系：原点 = 场地左上角（俯视同图 1），+X 右，+Y 下，单位 mm；与里程计坐标系不是一回事
-   ⚠ 原料区 X / 二维码板 Y 现场随机，本表取中值。几何来源与换算见 README §6 */
+   ⚠ 原料区 X / 二维码板 Y 现场随机，本表取中值 */
 
 /*---- 场地与十字车道 ----*/
 #define NAV_MAP_FIELD_MM		(2400)						//场地边长
@@ -105,7 +105,7 @@ static const NavSeg_t s_defaultMap[] = {	//地图
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_DOCK_QR_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },	//05 前进 900 → (1200,300) 正对原料区
 
 	/* 第一批：原料区取料（任务码第 1 组） */
-	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },	//06 升降轴回零（装载的前置条件）
+	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },	//06 零点确认（装载的前置条件）
 	{ NAV_SEG_ALIGN,   0, 0, NAV_ALIGN_TIMEOUT_MS },	//07 视觉对准（视觉模块 1）
 	{ NAV_SEG_LOAD,    (int16_t)NAV_TASK_G_ORDER1, 0, NAV_LOAD_TIMEOUT_MS },	//08 三轮装载，每轮等色 → 对准 → 抓取
 
@@ -144,7 +144,7 @@ static const NavSeg_t s_defaultMap[] = {	//地图
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_X - NAV_MAP_DOCK_BUF_X), NAV_MAP_SPEED_LANE, 0 },	//34 前进 900 → (1200,1200)
 	{ NAV_SEG_TURN,    NAV_MAP_TURN_90, 0, NAV_TURN_TIMEOUT_MS },	//35 左转 90° → 机头朝 -Y
 	{ NAV_SEG_FORWARD, (int16_t)(NAV_MAP_CROSS_Y - NAV_MAP_DOCK_MAT_Y), NAV_MAP_SPEED_DOCK, 0 },	//36 前进 900 → (1200,300) 正对原料区
-	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },	//37 升降轴回零（已回零则本段秒过）
+	{ NAV_SEG_HOME,    0, 0, NAV_HOME_TIMEOUT_MS },	//37 零点确认（已标零则本段秒过）
 	{ NAV_SEG_ALIGN,   0, 0, NAV_ALIGN_TIMEOUT_MS },	//38 视觉对准
 	{ NAV_SEG_LOAD,    (int16_t)NAV_TASK_G_ORDER2, 0, NAV_LOAD_TIMEOUT_MS },	//39 三轮装载（第二批顺序）
 
