@@ -67,7 +67,9 @@ IntelliSense 走 CMake 导出的 `build-gcc/Debug/compile_commands.json`，参�
 | `APP_LOG/nav_seg.c` | **编排层 · 航段实现**：平移 / 横移到位判据、对准段、装载段、取放段 | 状态机迁移、地图数据 |
 | `APP_LOG/nav_align.c` | **编排层 · 对准与挑色**：视觉1 闭环对准、任务码解析、目标色 / 位号查询 | 状态机迁移、直接下发 CAN |
 | `APP_LOG/nav_util.c` | **编排层 · 工具与读接口**：角度折算、绝对值、`nav_Load` / `nav_GetState` / `nav_GetStats` / `nav_GetTaskCode` 等只读接口 | 控制律、状态迁移 |
-| `APP_LOG/nav_map.h` | **场地地图**：初赛赛场的几何 / 区域 / 停靠点坐标 + **默认路线表**（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
+| `APP_LOG/nav_geom.h` | **场地几何常量**：区域位置与尺寸、停靠点、车体尺寸、位号步距、航段速度（纯宏，供路线表与走廊图共用） | 任何逻辑代码、类型定义 |
+| `APP_LOG/nav_map.h` | **默认路线表**：初赛全程 `s_defaultMap[]` + `NAV_SEG_DOCK` 的段值角色（纯数据，无逻辑） | 任何逻辑代码、里程计状态 |
+| `APP_LOG/nav_path.c/.h` | **走廊图与找路**：9 节点 12 边的可行驶图、带转向等效里程的最短路（遇障后按堵边位图重找） | 车体动作与航段展开（在 `nav.c`） |
 | `APP_LOG/avoid.c/.h` | **避障层**：读视觉2 的障碍横向偏移，**在 `nav_Step()` 之后**往黑板 `chassis.vx` 上叠加让行分量（只叠加不覆盖） | 状态机迁移、航段序列、直接下发 CAN |
 | `IFACE/auxiliary.c/.h` | **辅助机构接入层**：对上层只暴露 `aux_Init()` / `aux_HandleCmd()` / `aux_Step()` 三个入口，对内聚合 `DEVICE/` 下机构层；`CFG_HOST_CAN_ENABLED` 的指令闸门也在此 | 状态机迁移、底盘四轮 |
 | `IFACE/screen.c/.h` | **串口屏协议层**：TJC（淘晶驰）"ASCII 指令 + `FF FF FF`"的组帧、发送与事件解析；USART2 硬件配置在 `input.c` | 其他串口通道、状态机迁移 |
@@ -482,9 +484,9 @@ Data[7]     保留填 0
 | **加底盘相关逻辑**<br>新运动模式、IMU 融合、更好的里程计 | `DEVICE/chassis_drive.c` | `chassis_UpdateOdom()` / `chassis_InverseKinematics()` / `chassis_DriveStep()` |
 | **改状态迁移**<br>加新状态、改转移条件 | `CONTRACT/contract.c` | 只动 `s_transTable[]` 和 `contract_OnEnter()` 的分支 |
 | **改协议**<br>新指令码、新地址 | `CONTRACT/contract.h` + `BSP/Emm_V5.c` | 功能码枚举在 `contract.h`，协议字节组装在 `Emm_V5.c` |
-| **改默认路线**<br>动作序列、航段表 | `APP_LOG/nav_map.h` | `s_defaultMap[]`；段值由同文件场地常量推出，启停方式与航向基准见下文。⚠ 段类型是 `nav.h` 的 `NavSegType_t`，加新类型要同时改 `nav_SegStep()` |
+| **改默认路线**<br>动作序列、航段表 | `APP_LOG/nav_map.h` | `s_defaultMap[]`；段值由 `nav_geom.h` 的场地常量推出，启停方式与航向基准见下文。⚠ 段类型是 `nav.h` 的 `NavSegType_t`，加新类型要同时改 `nav_SegStep()` |
 | **改对准 / 装载策略**<br>对准窗口与增益、重试次数、抓取轮数 | `APP_LOG/nav.h` 的 `NAV_ALIGN_*` / `NAV_LOAD_*` / `NAV_HOME_*` | 控制律在 `nav_align.c` 的 `nav_AlignCtrl()`；重试与超时框架在 `nav.c` 的 `nav_TryTimeout()`。⚠ 三个高度与夹子角度属机构，仍在 `grip_seq.h` 的 `GRIP_*` |
-| **改场地几何**<br>区域位置、尺寸 | `APP_LOG/nav_map.h` | 纯数据（场地坐标系下的几何、停靠点、路线表），无逻辑；`nav*.c` 只做引擎 |
+| **改场地几何**<br>区域位置、尺寸 | `APP_LOG/nav_geom.h` | 纯宏（场地坐标系下的几何、停靠点、车体尺寸、位号步距），无逻辑、无类型依赖；`nav*.c` 与 `nav_map.h` 都只引用 |
 | **加数据源**<br>第二个相机、新传感器串口 | `input.c` + `vision.c` | `InputCh_t` 加通道 + `input_Init()` 补引脚与 DMA；解析入口放进各自的 `xxx_Step()`（视觉见 `vision.c` 的 `vision_Step()`）。⚠ `input.c` 另有「摁键」小节，新增通道时不要混进去 |
 | **改串口屏协议**<br>换屏型号、加控件指令、加事件码 | `screen.c` + `screen.h` | 发送/事件宏（`SCREEN_*`）在 `screen.h`；帧长与起始码的分发在 `screen_Dispatch()` |
 | **改摁键引脚 / 延时**<br>换脚、换成板载键、改倒计时 | `input.h` | `KEY_PORT` 与 `KEY_CLK` 必须同步改，再改 `KEY_PIN`；有效电平改 `KEY_ACTIVE_LOW`；时序与接线见下文「摁键自启动」 |
@@ -493,11 +495,11 @@ Data[7]     保留填 0
 | **换舵机 / 标定行程** | `servo.h` | `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US` |
 | **改夹持机构的角度 / 高度 / 斜坡** | `grip_seq.h` | `GRIP_ROT_*`（三个端点角与斜坡速率）、`GRIP_JAW_*`（开合角）、`GRIP_H_*`（抓取 / 落盘 / 安全 / 卸载 / 取回 / 码垛各高度）、`GRIP_TRAY_*`（物料盘通道 / 三槽位 / 斜坡）、`GRIP_*_TIMEOUT_MS` |
 
-### 场地地图与默认路线（`nav_map.h`）
+### 场地地图与默认路线（`nav_geom.h` + `nav_map.h`）
 
-`APP_LOG/nav_map.h` 是**智能搬运初赛赛场的地图文件**（纯数据，无逻辑），取自
-`DOC/07_智能搬运赛项命题要求.md` 与「图 1 初赛赛场示意图」；**场地几何与默认路线表都在该文件**，
-`nav*.c` 只保留引擎逻辑。
+`APP_LOG/nav_geom.h` 是**场地几何常量**（纯宏，无逻辑），`APP_LOG/nav_map.h` 是**默认路线表**；
+两者都取自 `DOC/07_智能搬运赛项命题要求.md` 与「图 1 初赛赛场示意图」，`nav*.c` 只保留引擎逻辑。
+几何单独成文件，是因为 `nav_path.c` 的走廊图也要用这些坐标，而路线表依赖 `NavSeg_t`。
 
 - **坐标系**：原点 = 场地左下角，+X 向右，+Y 向上，单位 mm。
   它与里程计坐标系（上电点为原点、随车体）**不是一个东西**；两者的换算取决于上电摆放位姿。

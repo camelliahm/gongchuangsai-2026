@@ -59,6 +59,7 @@ set(APPLOG_SOURCES
     "${PROJ_ROOT}/APP_LOG/nav_seg.c"
     "${PROJ_ROOT}/APP_LOG/nav_align.c"
     "${PROJ_ROOT}/APP_LOG/nav_util.c"
+    "${PROJ_ROOT}/APP_LOG/nav_path.c"
     "${PROJ_ROOT}/APP_LOG/avoid.c"
 )
 

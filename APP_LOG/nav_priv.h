@@ -20,9 +20,6 @@
 #define NAV_GRIP_RELOAD		(1u)	//取放模式：取回（车外目标区 → 物料盘）
 #define NAV_GRIP_STACK		(2u)	//取放模式：码垛卸料（同卸料，放置高度抬一个料高）
 
-#define NAV_DOCK_TO_QR		(0)		//启停区段角色：起点 → 读码列
-#define NAV_DOCK_TO_START	(1)		//启停区段角色：原料区行 → 起点
-
 /*---- 内部状态（定义在 nav.c）----------------------------------------*/
 
 typedef struct {
