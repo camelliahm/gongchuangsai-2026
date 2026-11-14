@@ -24,9 +24,7 @@
 
 /*---- 原料区（顶边电动转盘，φ300，台面高 80~100）----*/
 #define NAV_MAP_MAT_D_MM		(300)						//转盘直径
-#define NAV_MAP_MAT_CX_MIN		(1100)						//圆心 X 下限（现场随机）
-#define NAV_MAP_MAT_CX_MAX		(1300)						//圆心 X 上限（现场随机）
-#define NAV_MAP_MAT_CX_NOM		((NAV_MAP_MAT_CX_MIN + NAV_MAP_MAT_CX_MAX) / 2)	//原料区圆心 X 中值
+#define NAV_MAP_MAT_CX_NOM		NAV_MAP_FIELD_HALF			//1200 圆心 X（赛题给 1100~1300 随机，取代中值）
 #define NAV_MAP_MAT_CY_NOM		(0)							//圆心落在顶边线上
 
 /*---- 暂存区（左边，580×150 竖向居中，3 个圆环）----*/
@@ -34,16 +32,13 @@
 #define NAV_MAP_BUF_W_MM		(150)						//宽，沿 X
 #define NAV_MAP_BUF_X0			(0)							//贴左边线
 #define NAV_MAP_BUF_Y0			(NAV_MAP_FIELD_HALF - NAV_MAP_BUF_L_MM / 2)	//910
-#define NAV_MAP_RING_PITCH_MM	(150)						//圆环间距（1→2→3 环）
 
 /*---- 粗加工区（底边，580×150 横向居中，3 个圆环）----*/
 #define NAV_MAP_ROU_X0			(NAV_MAP_FIELD_HALF - NAV_MAP_BUF_L_MM / 2)	//910
 #define NAV_MAP_ROU_Y0			(NAV_MAP_FIELD_MM - NAV_MAP_BUF_W_MM)		//2250
 
 /*---- 二维码板（右边墙，A4 横放，QR 80×80 居中）----*/
-#define NAV_MAP_QR_Y_MIN		(1100)						//板心 Y 下限（现场随机）
-#define NAV_MAP_QR_Y_MAX		(1300)						//板心 Y 上限（现场随机）
-#define NAV_MAP_QR_Y_NOM		(NAV_MAP_FIELD_HALF)		//二维码板板心 Y 中值
+#define NAV_MAP_QR_Y_NOM		NAV_MAP_FIELD_HALF			//1200 板心 Y（赛题给 1100~1300 随机，取代中值）
 #define NAV_MAP_QR_MM			(80)						//二维码边长
 
 /*---- 障碍物与物料（摘自命题要求的物理尺寸）----*/
@@ -83,10 +78,10 @@
 
 #define NAV_MAP_DWELL_QR_MS		(800)						//读二维码 + 任务码上屏
 
-/*---- 目标区位置（圆环）横移 ----*/
-/* 车停在区域入口停靠点时正对哪个位号、位号增大朝车体哪一侧，取决于现场两区的摆位与编号方向 */
-#define NAV_MAP_RING_DOCK_NUM	(2)							//入口停靠点正对的位号(1~3)  ⚠ 占位值，待实测
-#define NAV_MAP_RING_DIR		(-1)						//位号 +1 时的车体横移方向：+1 = 右移，−1 = 左移  ⚠ 占位值，待实测
+/*---- 目标区靶位（圆环）横移 ----*/
+/* 暂存区与粗加工区各 3 个靶位，沿 580 长边等距 150；区域中心即 2 号靶位，入口停靠点正对它 */
+#define NAV_MAP_RING_DOCK_NUM	(2)							//入口停靠点正对的位号
+#define NAV_MAP_RING_STEP_MM	(-150)						//位号 +1 对应的车体横移量，负 = 左移
 
 /*---- 默认路线 ----------------------------------------*/
 

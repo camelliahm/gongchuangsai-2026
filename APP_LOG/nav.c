@@ -177,8 +177,7 @@ void nav_SegStart(void)
 			return;
 		}
 
-		s_nav.segDisp = ((int32_t)ring - (int32_t)s_nav.ringAt)
-						* (int32_t)NAV_MAP_RING_PITCH_MM * (int32_t)NAV_MAP_RING_DIR;
+		s_nav.segDisp = ((int32_t)ring - (int32_t)s_nav.ringAt) * (int32_t)NAV_MAP_RING_STEP_MM;
 		s_nav.ringAt  = ring;
 	}
 

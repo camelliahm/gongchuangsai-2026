@@ -67,7 +67,7 @@ uint8_t nav_AlignCtrl(void)
  * @retval 通过校验的组数（全部通过时等于 NAV_TASK_GROUP_NUM，其余情况为 0）
  * @note   视觉模块 2 上报的是 12 位纯数字（如 "156123516231"），'+' 等分隔符一律跳过，
  *         故带分隔符的原文同样可解析；颜色组只认 1~6，有任一位越界即整码作废；
- *         位置组不做范围校验 —— 现场圆环数未定，交由消费方判断
+ *         位置组不做范围校验，交由消费方判断
  * @author camelliahm
  */
 static uint8_t nav_ParseTask(const char *code, uint8_t len)
