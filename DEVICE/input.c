@@ -185,6 +185,12 @@ static struct {
 	uint8_t  zeroLatched;	//1 = 双键清零已触发，须松开两键才复位（防一直按着反复清零）
 } s_manual;
 
+//启停区选择状态（现场抽签结果，PE3 非手动短按切换）
+static struct {
+	uint8_t  sel;			//当前选定：1 或 2
+	uint8_t  pend;			//1 = 发生过一次切换，待上层取走
+} s_dock;
+
 /**
  * @brief  读指定引脚电平并折算成"是否按下"
  * @param  port 端口
@@ -314,7 +320,7 @@ static void input_ManualKeyStep(void)
 			s_manual.pend = MANUAL_ACT_INC;
 		}
 
-		/* 双键同按（PE4+PE5）保持 KEY_ZERO_PRESS_MS：把升降轴当前位置重标为零。
+		/* 双键同按（DEC+INC）保持 KEY_ZERO_PRESS_MS：把升降轴当前位置重标为零。
 		 * 同按瞬间 DEC / INC 各会产生一次按下边沿，故此处撤销该意图 —— 否则机构会先动一下。
 		 * 一直按着只触发一次，松开两键才复位（zeroLatched） */
 		if ((s_manualKey[1].stable != 0u) && (s_manualKey[2].stable != 0u))
@@ -390,11 +396,16 @@ static void input_ManualKeyStep(void)
 					}
 					else
 					{
-						//短按：手动模式下切换对象
+						//短按：手动模式下切换对象，非手动时切换启停区（现场抽签）
 						if (s_manual.active != 0u)
 						{
 							s_manual.obj = (uint8_t)((s_manual.obj + 1u) % MANUAL_OBJ_NUM);
 							s_manual.pend = MANUAL_ACT_NEXT;
+						}
+						else
+						{
+							s_dock.sel  = (uint8_t)((s_dock.sel == 1u) ? 2u : 1u);
+							s_dock.pend = 1u;
 						}
 					}
 				}
@@ -513,6 +524,9 @@ void input_Init(void)
 	s_manual.active = 0u;
 	s_manual.obj    = MANUAL_LIFT;
 	s_manual.pend   = MANUAL_ACT_NONE;
+
+	s_dock.sel  = 1u;	//上电默认启停区 1，抽签结果由操作者按 PE3 切换
+	s_dock.pend = 0u;
 }
 
 /**
@@ -637,4 +651,35 @@ uint8_t input_ManualPop(void)
 	s_manual.pend = MANUAL_ACT_NONE;
 
 	return act;
+}
+
+/*---- 启停区选择对外接口 -------------------------------------------*/
+
+/**
+ * @brief  读当前选定的启停区号
+ * @retval 1 或 2
+ * @author camelliahm
+ */
+uint8_t input_DockSel(void)
+{
+	return s_dock.sel;
+}
+
+/**
+ * @brief  取走一次启停区切换事件
+ * @retval 0 = 本次无切换；1/2 = 刚切到的启停区号
+ * @note   读取后即清标志；供编排层转给 nav_SetStart()，本层不直接依赖导航模块
+ * @author camelliahm
+ */
+uint8_t input_DockPop(void)
+{
+	uint8_t sel = 0u;
+
+	if (s_dock.pend != 0u)
+	{
+		s_dock.pend = 0u;
+		sel = s_dock.sel;
+	}
+
+	return sel;
 }

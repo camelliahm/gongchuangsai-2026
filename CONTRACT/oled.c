@@ -259,8 +259,14 @@ void oled_ShowStatus(void)
 
 	oled_Clear();
 
-	//行1：状态名 + 四轮在线数
+	//行1：状态名 + 启停区号 + 四轮在线数
 	oled_ShowString(1u, 1u, contract_StateName(chassis.state));
+
+	buf[0] = 'D';
+	buf[1] = (char)('0' + input_DockSel());		//现场抽签选定的启停区：D1 / D2
+	buf[2] = '\0';
+	oled_ShowString(1u, 11u, buf);
+
 	buf[0] = (char)('0' + online);
 	buf[1] = '/';
 	buf[2] = (char)('0' + CHASSIS_MOTOR_NUM);
@@ -316,15 +322,15 @@ void oled_ShowManual(void)
 			oled_ShowString(2u, 1u, "NO ZERO");
 		}
 
-		oled_ShowString(3u, 1u, "PE4- PE5+ 5mm");
-		oled_ShowString(4u, 1u, "PE4+PE5=ZERO");
+		oled_ShowString(3u, 1u, "DEC INC 5mm");
+		oled_ShowString(4u, 1u, "DEC+INC=ZERO");
 		break;
 
 	case MANUAL_JAW:
 		oled_ShowString(1u, 1u, "JAW");
 		//夹爪当前态：读 grip 无直接开合标志，用当前目标角与开角比较近似显示
-		oled_ShowString(2u, 1u, "PE4 open");
-		oled_ShowString(3u, 1u, "PE5 close");
+		oled_ShowString(2u, 1u, "DEC open");
+		oled_ShowString(3u, 1u, "INC close");
 		break;
 
 	case MANUAL_ROT:
@@ -337,7 +343,7 @@ void oled_ShowManual(void)
 	case MANUAL_TRAY:
 		oled_ShowString(1u, 1u, "TRAY");
 		oled_ShowString(2u, 1u, "slot 1/2/3");
-		oled_ShowString(4u, 1u, "PE4<  PE5>");
+		oled_ShowString(4u, 1u, "DEC<  INC>");
 		break;
 
 	default:

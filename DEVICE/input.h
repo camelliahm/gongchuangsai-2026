@@ -49,20 +49,20 @@ const InputSlot_t *input_GetSlot(InputCh_t ch);
 //换引脚只改下面 KEY_PORT / KEY_CLK / KEY_PIN 三行
 #define KEY_PORT			GPIOE					//摁键所在端口，改端口须同步 KEY_CLK
 #define KEY_CLK				RCC_AHB1Periph_GPIOE	//KEY_PORT 对应的 AHB1 时钟
-#define KEY_PIN				GPIO_Pin_2				//自启动摁键引脚（PE2 = 板载 1SW2，外部 10K 上拉，按下接 GND）
+#define KEY_PIN				GPIO_Pin_2				//自启动摁键引脚（PE2 = 板载 1SW2，丝印 START，外部 10K 上拉，按下接 GND）
 #define KEY_ACTIVE_LOW		(1u)					//1 = 按下为低（内部上拉）；0 = 按下为高（内部下拉）
 #define KEY_PUPD			(KEY_ACTIVE_LOW ? GPIO_PuPd_UP : GPIO_PuPd_DOWN)	//随有效电平联动，勿单独改
 #define KEY_DEBOUNCE_CNT	(4u)					//消抖：连续同电平的扫描次数（控制环 5 ms → 20 ms）
 #define KEY_START_DELAY_MS	(3000u)					//按下到自启动的延时(ms)
 
-/*---- 手动调参摁键（PE3~PE5，与 PE2 同端口，低有效）----*/
+/*---- 手动调参摁键（PE3~PE5，丝印 MODE/DEC/INC，与 PE2 同端口，低有效）----*/
 #define KEY_MANUAL_PORT		GPIOE					//手动键所在端口（与自启动键同端口）
 #define KEY_MANUAL_CLK		RCC_AHB1Periph_GPIOE	//手动键端口时钟
-#define KEY_MODE_PIN		GPIO_Pin_3				//模式键（PE3）：短按切对象 / 长按进退手动
-#define KEY_DEC_PIN			GPIO_Pin_4				//减键（PE4）
-#define KEY_INC_PIN			GPIO_Pin_5				//加键（PE5）
+#define KEY_MODE_PIN		GPIO_Pin_3				//模式键（PE3，丝印 MODE）：短按切对象（手动中）/ 切启停区（非手动）/ 长按进退手动
+#define KEY_DEC_PIN			GPIO_Pin_4				//减键（PE4，丝印 DEC）
+#define KEY_INC_PIN			GPIO_Pin_5				//加键（PE5，丝印 INC）
 #define KEY_LONG_PRESS_MS	(800u)					//长按判定时长(ms)，用于进退手动模式
-#define KEY_ZERO_PRESS_MS	(2000u)					//双键同按判零时长(ms)：PE4+PE5 同时按住达此时长才重标升降轴零点
+#define KEY_ZERO_PRESS_MS	(2000u)					//双键同按判零时长(ms)：DEC+INC 同时按住达此时长才重标升降轴零点
 #define KEY_MANUAL_LIFT_STEP_MM	(5.0f)				//手动升降轴单步量(mm)，正=升/负=降
 
 /*---- 手动调参：调节对象 ----*/
@@ -93,5 +93,12 @@ uint8_t input_ManualObj(void);
 
 //取走一个手动动作意图（MANUAL_ACT_NONE 表示无新意图）
 uint8_t input_ManualPop(void);
+
+/*---- 启停区选择（现场抽签，PE3 非手动短按切换）----*/
+//当前选定的启停区号：1 或 2，上电默认 1
+uint8_t input_DockSel(void);
+
+//取走一次启停区切换事件：0 = 无切换，1/2 = 刚切到的启停区号
+uint8_t input_DockPop(void);
 
 #endif

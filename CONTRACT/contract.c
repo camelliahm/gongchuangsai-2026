@@ -554,6 +554,17 @@ void contract_ControlStep(void)
 	aux_Step();
 	input_Step();  //（按下延时 3 s 后投 EV_ENABLE + EV_START），并刷新三条串口的在线标志
 	aux_ManualStep();  //手动调参：消费 input 的手动意图，转调升降轴/夹持机构（IDLE/READY 下受理）
+
+	/* 启停区切换：PE3 非手动短按产生一次事件，转给导航层（现场抽签结果，须在启动前设定） */
+	{
+		uint8_t dock = input_DockPop();
+
+		if (dock != 0u)
+		{
+			nav_SetStart(dock);
+		}
+	}
+
 	vision1_Step();  //视觉模块 1 帧解析（物块颜色 + 对准相对距离）
 	vision_Step();  //视觉模块 2 帧解析（二维码任务码 / 避障列表）
 	screen_Step();  //串口屏上报帧解析（USART2；只收不阻塞，发送在 STATE 任务里）
