@@ -86,7 +86,8 @@ uint8_t nav_TryTimeout(uint32_t tryMs, uint8_t retryMax)
  */
 uint8_t nav_IsRingFamily(uint8_t type)
 {
-	if ((type == (uint8_t)NAV_SEG_RING) || (type == (uint8_t)NAV_SEG_STACK)
+	if ((type == (uint8_t)NAV_SEG_RING) || (type == (uint8_t)NAV_SEG_RING_BASE)
+			|| (type == (uint8_t)NAV_SEG_STACK)
 			|| (type == (uint8_t)NAV_SEG_UNLOAD) || (type == (uint8_t)NAV_SEG_RELOAD)
 			|| (type == (uint8_t)NAV_SEG_STACKED))
 	{
@@ -108,6 +109,7 @@ void nav_SegStart(void)
 	uint32_t now = xTaskGetTickCount();
 	float offset = 0.0f;
 	uint8_t ring = 0u;
+	int32_t dockY = 0;
 
 	if (seg->type == NAV_SEG_TURN)
 	{
@@ -146,7 +148,7 @@ void nav_SegStart(void)
 		s_nav.cntLoad   = 0u;		//统计影子与装载计数同步清零
 	}
 
-	//本段位移：平移段直接取段值；目标区横移段按"目标位号 − 当前位号"折算
+	//本段位移：平移段直接取段值；目标区步进段按"目标位号 − 当前位号"折算
 	s_nav.segDisp = 0;
 	if ((seg->type == NAV_SEG_FORWARD) || (seg->type == NAV_SEG_STRAFE))
 	{
@@ -179,6 +181,22 @@ void nav_SegStart(void)
 
 		s_nav.segDisp = ((int32_t)ring - (int32_t)s_nav.ringAt) * (int32_t)NAV_MAP_RING_STEP_MM;
 		s_nav.ringAt  = ring;
+	}
+	else if (seg->type == NAV_SEG_RING_BASE)
+	{
+		//离区前回到入口基准位，否则那半个位距会变成下一区域的横向偏差
+		s_nav.segDisp = ((int32_t)NAV_MAP_RING_DOCK_NUM - (int32_t)s_nav.ringAt)
+						* (int32_t)NAV_MAP_RING_STEP_MM;
+		s_nav.ringAt  = (uint8_t)NAV_MAP_RING_DOCK_NUM;
+	}
+	else if (seg->type == NAV_SEG_DOCK)
+	{
+		//起点由现场抽签决定，位移只能在运行时折算
+		dockY = (s_nav.startSel == 2u) ? (int32_t)NAV_MAP_DOCK_START2_Y
+									   : (int32_t)NAV_MAP_DOCK_START1_Y;
+		s_nav.segDisp = (seg->value == NAV_DOCK_TO_QR)
+						? (dockY - (int32_t)NAV_MAP_DOCK_QR_Y)		//起点 → 读码列
+						: ((int32_t)NAV_MAP_DOCK_MAT_Y - dockY);	//原料区行 → 起点
 	}
 
 	//目标航向与 odomYawCont 同在连续域，姿态环可直接相减
@@ -256,6 +274,8 @@ uint8_t nav_SegStep(void)
 	case NAV_SEG_STRAFE:
 	case NAV_SEG_RING:
 	case NAV_SEG_STACK:
+	case NAV_SEG_RING_BASE:
+	case NAV_SEG_DOCK:
 		return nav_MotionStep();
 	}
 }
@@ -320,6 +340,7 @@ void nav_Init(void)
 	s_nav.gripStarted = 0u;
 	s_nav.segDisp     = 0;
 	s_nav.ringAt      = (uint8_t)NAV_MAP_RING_DOCK_NUM;
+	s_nav.startSel    = 1u;
 	s_nav.loadGroup   = (uint8_t)NAV_TASK_G_ORDER1;
 
 	for (i = 0u; i < (uint8_t)NAV_TASK_GROUP_NUM; i++)
@@ -339,6 +360,30 @@ void nav_Init(void)
 	s_nav.cntLoad = 0u;
 	s_nav.codeLen = 0u;
 	s_nav.code[0] = '\0';
+}
+
+/**
+ * @brief  选择启停区（现场抽签结果）
+ * @param  sel 1 = 启停区 1，2 = 启停区 2；其他值忽略
+ * @note   只影响首末两段的位移折算，须在启动前设定
+ * @author camelliahm
+ */
+void nav_SetStart(uint8_t sel)
+{
+	if ((sel == 1u) || (sel == 2u))
+	{
+		s_nav.startSel = sel;
+	}
+}
+
+/**
+ * @brief  读当前选定的启停区号
+ * @retval 1 或 2
+ * @author camelliahm
+ */
+uint8_t nav_GetStart(void)
+{
+	return s_nav.startSel;
 }
 
 /**

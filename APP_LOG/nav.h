@@ -17,9 +17,11 @@ typedef enum {
 	NAV_SEG_LOAD,		//三轮装载：每轮先对准再抓取，轮数由 GRIP_LOAD_TOTAL 定，value = 颜色组号
 	NAV_SEG_UNLOAD,		//单次卸载：从物料盘第 value 槽取料并放到车外目标区，value = 槽位(1~3)
 	NAV_SEG_RELOAD,		//单次取回：把车外目标区的物料装回物料盘第 value 槽，value = 槽位(1~3)
-	NAV_SEG_RING,		//横移对准任务码指定位置：value = 组号×10 + 件序号，位置号取 task[组][件]
-	NAV_SEG_STACK,		//横移对准码垛位：value = 第二批件序号(0~2)，位置取第一批同色物料所在位
+	NAV_SEG_RING,		//步进到任务码指定位置：value = 组号×10 + 件序号，位置号取 task[组][件]
+	NAV_SEG_STACK,		//步进到码垛位：value = 第二批件序号(0~2)，位置取第一批同色物料所在位
 	NAV_SEG_STACKED,	//单次码垛卸载：动作同 NAV_SEG_UNLOAD，放置高度抬一个料高，value = 槽位(1~3)
+	NAV_SEG_RING_BASE,	//回入口基准位：沿机头方向退回 NAV_MAP_RING_DOCK_NUM 号位，value 忽略
+	NAV_SEG_DOCK,		//启停区横移：位移按抽签起点在运行时折算，value = 角色（见 NAV_DOCK_*）
 } NavSegType_t;
 
 //航段：位移/转角用 value + 符号表达，speed 只对平移段有效
@@ -115,6 +117,12 @@ bool nav_Load(const NavSeg_t *segs, uint16_t num);
 
 //请求启动（只置标志；实际装载在 nav_Step() 的控制环上下文里完成）
 void nav_Start(void);
+
+//选择启停区（现场抽签结果）：1 或 2，其他值忽略
+void nav_SetStart(uint8_t sel);
+
+//读当前选定的启停区号
+uint8_t nav_GetStart(void);
 
 //中止并清速度。正常路径由 nav_Step() 在离开 RUNNING 时自动调用
 void nav_Abort(void);

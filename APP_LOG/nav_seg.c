@@ -7,6 +7,7 @@
  * @brief  平移 / 横移段：按"位移在段方向上的投影"判到位并给速度
  * @retval 1 = 已到位；0 = 进行中
  * @note   前进(+y) 映射到 (-sin, cos)，右移(+x) 映射到 (cos, sin)；
+ *         沿机头轴的一族 = 前进 / 位号步进 / 回基准位，横移族 = 横移 / 启停区；
  *         位移来源由 nav_SegStart() 定（平移取段值，横移按位号折算），本函数只看 s_nav.segDisp
  * @author camelliahm
  */
@@ -20,6 +21,7 @@ uint8_t nav_MotionStep(void)
 	float left;
 	int32_t disp;
 	int16_t v;
+	uint8_t alongYaw;
 
 	/* 车体轴在本段起始航向下映射到里程计坐标：
 	 * 前进(+y) → (-sin, cos)，右移(+x) → (cos, sin) */
@@ -28,7 +30,11 @@ uint8_t nav_MotionStep(void)
 	dy   = chassisDrive.odomY - s_nav.startY;
 	disp = s_nav.segDisp;
 
-	if (seg->type == NAV_SEG_FORWARD)
+	//沿机头轴：前进 / 位号步进 / 回基准位；横移轴：横移 / 启停区
+	alongYaw = ((seg->type == NAV_SEG_FORWARD) || (seg->type == NAV_SEG_RING)
+			|| (seg->type == NAV_SEG_STACK) || (seg->type == NAV_SEG_RING_BASE)) ? 1u : 0u;
+
+	if (alongYaw != 0u)
 	{
 		proj = dx * (-sinf(rad)) + dy * cosf(rad);
 	}
@@ -54,7 +60,7 @@ uint8_t nav_MotionStep(void)
 	v = (left <= (float)NAV_DECEL_MM) ? (int16_t)NAV_DECEL_VEL : seg->speed;
 	if (disp < 0) { v = (int16_t)(-v); }
 
-	if (seg->type == NAV_SEG_FORWARD)
+	if (alongYaw != 0u)
 	{
 		chassis.vx = 0;
 		chassis.vy = v;

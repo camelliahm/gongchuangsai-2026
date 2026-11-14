@@ -20,6 +20,9 @@
 #define NAV_GRIP_RELOAD		(1u)	//取放模式：取回（车外目标区 → 物料盘）
 #define NAV_GRIP_STACK		(2u)	//取放模式：码垛卸料（同卸料，放置高度抬一个料高）
 
+#define NAV_DOCK_TO_QR		(0)		//启停区段角色：起点 → 读码列
+#define NAV_DOCK_TO_START	(1)		//启停区段角色：原料区行 → 起点
+
 /*---- 内部状态（定义在 nav.c）----------------------------------------*/
 
 typedef struct {
@@ -51,9 +54,12 @@ typedef struct {
 	//卸载 / 取回段
 	uint8_t			gripStarted;	//1 = 本段已发起取放动作，等序列走完
 
-	//目标区位置横移（RING / STACK）
+	//目标区位置横移（RING / STACK / RING_BASE）
 	int32_t			segDisp;		//本段位移(mm)：平移段直接取段值，横移段按位号折算
 	uint8_t			ringAt;			//车当前正对的位号(1~3)；区域内的段间保持，离开区域即复位
+
+	//启停区（现场抽签，1 或 2）
+	uint8_t			startSel;		//抽签选定的启停区号
 
 	//装载段
 	uint8_t			loadGroup;		//本轮装载读哪一组颜色：NAV_TASK_G_ORDER1 / ORDER2
